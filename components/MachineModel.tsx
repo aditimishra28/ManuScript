@@ -228,13 +228,27 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                     )}
                     {/* AR Overlay - Only in AR Mode */}
                     {!cameraError && (
-                        <div className="absolute inset-0 border-2 border-indigo-500/30 m-4 rounded pointer-events-none">
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 border border-white/50 rounded-full"></div>
-                            <div className="absolute bottom-2 left-2 bg-black/50 px-2 py-1 text-[10px] text-white">
-                                Object Recognition: {machine.type} (99%)
+                        <div className="absolute inset-0 border-2 border-indigo-500/30 m-4 rounded pointer-events-none overflow-hidden">
+                             {/* Scanning Line Animation */}
+                            <div className="absolute top-0 left-0 w-full h-1 bg-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.5)] animate-[scan_3s_ease-in-out_infinite]"></div>
+                            
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 border-2 border-white/30 rounded-lg flex items-center justify-center">
+                                <div className="w-1 h-1 bg-white rounded-full"></div>
+                            </div>
+                            <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur px-2 py-1 text-[10px] text-white flex items-center gap-2 border-l-2 border-indigo-500">
+                                <Scan className="w-3 h-3 text-indigo-400 animate-pulse" />
+                                <span>Target Locked: {machine.type} (99%)</span>
                             </div>
                         </div>
                     )}
+                    <style>{`
+                        @keyframes scan {
+                            0% { top: 0%; opacity: 0; }
+                            10% { opacity: 1; }
+                            90% { opacity: 1; }
+                            100% { top: 100%; opacity: 0; }
+                        }
+                    `}</style>
                 </>
               ) : (
                 <>

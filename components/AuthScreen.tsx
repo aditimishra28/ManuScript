@@ -1,25 +1,25 @@
 import React, { useState } from 'react';
-import { Shield, Lock, Factory, Server, Key } from 'lucide-react';
+import { Shield, Lock, Factory, Server, Key, Info } from 'lucide-react';
 
 interface AuthScreenProps {
   onLogin: () => void;
 }
 
 const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [gateway, setGateway] = useState('us-east-1.sentinai.cloud');
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [email, setEmail] = useState('demo@sentinai.cloud');
+  const [password, setPassword] = useState('demo123');
+  const [error, setError] = useState('');
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    setIsConnecting(true);
+    setError('');
     
-    // Simulate network handshake only (much faster than before)
-    setTimeout(() => {
-        setIsConnecting(false);
+    // Simple local check for demo purposes
+    if (email === 'demo@sentinai.cloud' && password === 'demo123') {
         onLogin();
-    }, 800);
+    } else {
+        setError('Invalid demo credentials. Try demo@sentinai.cloud / demo123');
+    }
   };
 
   return (
@@ -35,7 +35,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             </div>
             <div>
                 <h1 className="text-xl font-bold text-white tracking-tight">Sentin<span className="text-indigo-500">AI</span> Enterprise</h1>
-                <p className="text-slate-500 text-xs">IIoT Fleet Manager v2.4.1</p>
+                <p className="text-slate-500 text-xs">Client-Side Simulation Environment</p>
+            </div>
+        </div>
+
+        <div className="bg-blue-900/20 border border-blue-500/30 p-3 rounded mb-6 flex items-start gap-3">
+            <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-blue-200">
+                <strong>Demo Mode:</strong> This environment uses deterministic physics engines to simulate IoT telemetry. No real machinery is connected.
             </div>
         </div>
 
@@ -52,7 +59,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-700 text-slate-200 text-sm rounded block pl-10 p-2.5 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-colors placeholder:text-slate-700"
-                        placeholder="id@corp.local" 
                     />
                 </div>
             </div>
@@ -69,51 +75,24 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-700 text-slate-200 text-sm rounded block pl-10 p-2.5 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-colors placeholder:text-slate-700"
-                        placeholder="••••••••••••" 
                     />
                 </div>
             </div>
 
-            <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Gateway Endpoint</label>
-                <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Server className="h-4 w-4 text-slate-500" />
-                    </div>
-                    <select 
-                        value={gateway}
-                        onChange={(e) => setGateway(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 text-slate-200 text-sm rounded block pl-10 p-2.5 focus:border-indigo-500 outline-none appearance-none cursor-pointer"
-                    >
-                        <option value="us-east-1.sentinai.cloud">US-East-1 (Ohio) - MQTT/WSS</option>
-                        <option value="eu-west-1.sentinai.cloud">EU-West-1 (Ireland) - MQTT/WSS</option>
-                        <option value="ap-northeast.sentinai.cloud">AP-Northeast (Tokyo) - MQTT/WSS</option>
-                    </select>
-                </div>
-            </div>
+            {error && <p className="text-rose-400 text-xs">{error}</p>}
 
             <button 
                 type="submit" 
-                disabled={isConnecting}
-                className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-sm px-5 py-3 transition-colors flex justify-center items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-sm px-5 py-3 transition-colors flex justify-center items-center gap-2"
             >
-                {isConnecting ? (
-                    <>
-                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Handshaking...
-                    </>
-                ) : (
-                    <>
-                        <Lock className="w-4 h-4" /> Connect to Gateway
-                    </>
-                )}
+               <Lock className="w-4 h-4" /> Launch Simulation
             </button>
         </form>
 
         <div className="mt-6 pt-4 border-t border-slate-800 text-center">
             <p className="text-[10px] text-slate-600">
-                Client Session ID: {Math.random().toString(36).substring(7).toUpperCase()} <br/>
-                Authorized use only. All telemetry is logged.
+                Session ID: {Math.random().toString(36).substring(7).toUpperCase()} <br/>
+                Data persistence is local to this browser instance.
             </p>
         </div>
       </div>

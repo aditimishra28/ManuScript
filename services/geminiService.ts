@@ -21,25 +21,20 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Prom
 }
 
 // -- EDGE COMPUTING SIMULATION --
-// Perform simple statistical analysis locally (Client-side) to save API tokens
-// and provide deterministic output for obvious issues.
 const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string | null => {
     if (readings.length < 5) return null;
-
     const latest = readings[readings.length - 1];
     
-    // Check 1: Immediate Critical Violation
     if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL FAILURE: Vibration exceeds safety limits. Immediate shutdown recommended.";
     if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL FAILURE: Core overheating detected. Fire hazard.";
 
-    // Check 2: Trend Analysis (Rising Temp)
     const recentTemps = readings.slice(-5).map(r => r.temperature);
     const isRising = recentTemps.every((val, i, arr) => i === 0 || val >= arr[i - 1]);
     const totalRise = recentTemps[4] - recentTemps[0];
     
     if (isRising && totalRise > 5) return "WARNING: Rapid temperature increase detected (+5°C in last 10s). Check coolant flow.";
 
-    return null; // No obvious issue, defer to AI if user requests
+    return null;
 };
 
 // Analyze raw textual sensor data to find hidden patterns
@@ -49,13 +44,11 @@ export const analyzeMachineHealth = async (
   customThresholds?: { vibration: number; temperature: number; noise: number }
 ): Promise<string> => {
   
-  // 1. Run Local Heuristics First (Fast & Cheap)
   const localInsight = localHeuristicCheck(recentReadings, customThresholds);
   if (localInsight) {
       return `[Automated Local Analysis]: ${localInsight}`;
   }
 
-  // 2. Only call Cloud AI if local check is inconclusive or user requests deep dive
   const readingsSummary = recentReadings.slice(-10).map(r => 
     `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}`
   ).join('\n');
@@ -126,11 +119,19 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
             }
         }));
         
-        // Sanitize response (sometimes models return markdown blocks for JSON)
         const text = response.text || "{}";
         const cleanJson = text.replace(/```json|```/g, '').trim();
         
-        return JSON.parse(cleanJson);
+        try {
+            return JSON.parse(cleanJson);
+        } catch (parseError) {
+            console.warn("JSON Parse Failed for AI plan", parseError);
+            return { 
+                diagnosis: "Automated parsing failed.", 
+                recommendation: "Review raw logs manually.", 
+                urgency: "High" 
+            };
+        }
     } catch (e) {
         console.error("Plan generation failed", e);
         return { diagnosis: "Unknown Issue", recommendation: "Manual inspection required", urgency: "Medium" };
