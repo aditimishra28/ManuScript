@@ -1,5 +1,14 @@
 import { Machine, MachineStatus, Alert, SensorReading } from '../types';
 import { db, MachineRecord, SensorReadingRecord } from './db';
+import { generateMaintenancePlan } from './geminiService';
+
+// -- Helper: Map Gemini Urgency to Alert Severity --
+const mapUrgencyToSeverity = (urgency: string): 'low' | 'medium' | 'high' => {
+  const u = urgency?.toLowerCase() || '';
+  if (u === 'immediate' || u === 'high') return 'high';
+  if (u === 'medium') return 'medium';
+  return 'low';
+};
 
 // -- Mock Data Generators --
 
@@ -84,26 +93,31 @@ const generateInitialMachines = (): MachineRecord[] => {
   ];
 };
 
-const generateReading = (prev: SensorReading | null, status: MachineStatus): SensorReading => {
-  const now = Date.now();
-  
-  let baseVib = status === MachineStatus.NORMAL ? 2.5 : status === MachineStatus.WARNING ? 5.5 : 8.5;
-  let baseTemp = status === MachineStatus.NORMAL ? 65 : status === MachineStatus.WARNING ? 78 : 95;
-  let baseNoise = status === MachineStatus.NORMAL ? 70 : 92;
+// DETERMINISTIC PHYSICS ENGINE
+// Use Sine waves based on Time to ensure all users see the same trends
+// at the same moment, regardless of client-side simulation.
+const generateReading = (prev: SensorReading | null, status: MachineStatus, timestamp: number): SensorReading => {
+  // Use a fixed epoch for sync
+  const t = timestamp / 1000; 
 
-  const vibration = Math.max(0, baseVib + (Math.random() - 0.5) * 2);
-  const temperature = Math.max(20, baseTemp + (Math.random() - 0.5) * 5);
-  const noise = Math.max(40, baseNoise + (Math.random() - 0.5) * 10);
-  const rpm = 1200 + (Math.random() - 0.5) * 50;
-  const powerUsage = 45 + (Math.random() - 0.5) * 2;
+  // Base Targets based on Status
+  const baseVib = status === MachineStatus.NORMAL ? 2.5 : status === MachineStatus.WARNING ? 5.5 : 8.5;
+  const baseTemp = status === MachineStatus.NORMAL ? 65 : status === MachineStatus.WARNING ? 78 : 95;
+  const baseNoise = status === MachineStatus.NORMAL ? 70 : 92;
+
+  // Add deterministic wave functions (Machinery vibration pattern)
+  // Math.sin(t) is deterministic. Math.random() is not.
+  const vibNoise = (Math.sin(t * 2) * 0.5) + (Math.cos(t * 5) * 0.2); 
+  const tempDrift = Math.sin(t * 0.1) * 2; // Slow temperature oscillation
+  const noiseSpike = Math.abs(Math.sin(t * 0.5)) * 5;
 
   return {
-    timestamp: now,
-    vibration,
-    temperature,
-    noise,
-    rpm,
-    powerUsage
+    timestamp: timestamp,
+    vibration: Math.max(0, baseVib + vibNoise),
+    temperature: Math.max(20, baseTemp + tempDrift),
+    noise: Math.max(40, baseNoise + noiseSpike),
+    rpm: 1200 + (Math.sin(t) * 10),
+    powerUsage: 45 + (Math.cos(t) * 2)
   };
 };
 
@@ -116,6 +130,10 @@ class ManufacturingPipeline {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private readonly MAX_UI_HISTORY = 50;
   private isInitialized = false;
+  
+  // Hysteresis Tracking
+  private statusCounters: Map<string, { count: number, status: MachineStatus }> = new Map();
+  private lastTickTime: number = Date.now();
 
   constructor() {
     // We defer initialization to start()
@@ -125,13 +143,8 @@ class ManufacturingPipeline {
   private async initialize() {
       if (this.isInitialized) return;
       
-      // 1. Seed DB if empty
       await db.initializeWithDefaults(generateInitialMachines());
-
-      // 2. Load alerts
       this.alerts = await db.alerts.orderBy('timestamp').reverse().limit(50).toArray();
-
-      // 3. Hydrate in-memory machine state
       this.machines = await db.getAllMachinesWithLatestHistory();
       
       this.isInitialized = true;
@@ -145,9 +158,10 @@ class ManufacturingPipeline {
     await this.initialize();
     
     console.log("Starting Manufacturing Pipeline...");
+    this.lastTickTime = Date.now();
     this.intervalId = setInterval(() => this.tick(), 2000);
     
-    // Prune data every minute to keep things clean
+    // Prune data every minute
     setInterval(() => db.pruneOldData(), 60000);
   }
 
@@ -161,7 +175,6 @@ class ManufacturingPipeline {
 
   public subscribe(listener: PipelineListener) {
     this.listeners.push(listener);
-    // If we have data, send immediately, otherwise wait for init
     if (this.isInitialized) {
         listener(this.machines, this.alerts);
     }
@@ -197,13 +210,9 @@ class ManufacturingPipeline {
           lastCalibration: new Date().toISOString().split('T')[0]
       };
 
-      // Persist to DB
       await db.machines.add(newMachineRecord);
-
-      // Add to memory state
       this.machines.push({ ...newMachineRecord, history: [] });
       this.notify();
-      
       return newMachineRecord;
   }
 
@@ -211,41 +220,66 @@ class ManufacturingPipeline {
   private async tick() {
     if (!this.isInitialized) return;
 
+    const now = Date.now();
+    const timeDelta = now - this.lastTickTime;
+    
+    const steps = Math.min(Math.floor(timeDelta / 2000), 10) || 1;
+    
+    this.lastTickTime = now;
+
+    let updatedMachines = [...this.machines];
     const readingsToLog: SensorReadingRecord[] = [];
     const alertsToLog: Alert[] = [];
-    
-    const updatedMachines = this.machines.map(machine => {
-      // 1. Ingest Data
-      const lastReading = machine.history.length > 0 ? machine.history[machine.history.length - 1] : null;
-      const newReading = generateReading(lastReading, machine.status);
-      
-      // Stage for DB Write
-      readingsToLog.push({ ...newReading, machineId: machine.id });
 
-      // 2. Pattern Analysis
-      const analysis = this.detectAnomalies(machine, newReading);
-      
-      // 3. State Update
-      const newHistory = [...machine.history, newReading].slice(-this.MAX_UI_HISTORY);
+    // Loop for catch-up steps (if any)
+    for (let i = 0; i < steps; i++) {
+        // Calculate timestamp for this step
+        const stepTime = now - ((steps - 1 - i) * 2000);
 
-      if (analysis.newAlert) {
-          alertsToLog.push(analysis.newAlert);
-          this.addAlert(analysis.newAlert);
-      }
-      
-      // If status changed, update DB
-      if (machine.status !== analysis.status) {
-          db.updateMachineStatus(machine.id, analysis.status);
-      }
+        updatedMachines = await Promise.all(updatedMachines.map(async (machine) => {
+            const lastReading = machine.history.length > 0 ? machine.history[machine.history.length - 1] : null;
+            
+            // Generate Reading
+            const newReading = generateReading(lastReading, machine.status, stepTime);
+            readingsToLog.push({ ...newReading, machineId: machine.id });
 
-      return {
-        ...machine,
-        history: newHistory,
-        status: analysis.status
-      };
-    });
+            // Analyze
+            const analysis = this.detectAnomalies(machine, newReading);
+            
+            // State Update
+            const newHistory = [...machine.history, newReading].slice(-this.MAX_UI_HISTORY);
+            
+            // Only process alerts on the *last* step (Current Time) to avoid spamming alerts from the past
+            const isLastStep = i === steps - 1;
+            let finalAlert = (isLastStep) ? analysis.newAlert : undefined;
 
-    // Bulk write to DB for performance
+            // Alert Enrichment (Only if real-time)
+            if (finalAlert) {
+                if (machine.status !== MachineStatus.CRITICAL && analysis.status === MachineStatus.CRITICAL) {
+                    try {
+                        const plan = await generateMaintenancePlan(finalAlert.message, machine.name);
+                        finalAlert.severity = mapUrgencyToSeverity(plan.urgency);
+                        finalAlert.message = `${finalAlert.message}. [AI: ${plan.diagnosis}]`;
+                    } catch (error) {
+                        console.warn("AI Alert Enrichment failed.", error);
+                    }
+                }
+                alertsToLog.push(finalAlert);
+                this.addAlert(finalAlert);
+            }
+            
+            if (isLastStep && machine.status !== analysis.status) {
+                db.updateMachineStatus(machine.id, analysis.status);
+            }
+
+            return {
+                ...machine,
+                history: newHistory,
+                status: isLastStep ? analysis.status : machine.status // Only update status on live tick
+            };
+        }));
+    }
+
     if (readingsToLog.length > 0) {
         db.logReadings(readingsToLog).catch(e => console.error("DB Write Error", e));
     }
@@ -258,44 +292,68 @@ class ManufacturingPipeline {
     this.notify();
   }
 
+  // Detect with Hysteresis (Debouncing)
   private detectAnomalies(machine: Machine, reading: SensorReading): { status: MachineStatus, newAlert?: Alert } {
-      let newStatus = machine.status;
+      let proposedStatus = machine.status;
       let newAlert: Alert | undefined;
 
-      if (machine.status === MachineStatus.NORMAL && Math.random() > 0.995) {
-         newStatus = MachineStatus.WARNING;
+      // Logic: Determine what the status *should* be based on current frame
+      if (reading.temperature > 85 || reading.vibration > 7) {
+          proposedStatus = MachineStatus.CRITICAL;
+      } else if (reading.temperature > 75 || reading.vibration > 5) {
+          proposedStatus = MachineStatus.WARNING;
+      } else {
+          proposedStatus = MachineStatus.NORMAL;
+      }
+      
+      // Random Failures (Simulation only) - Use Deterministic Randomness based on Minute of hour
+      const currentMinute = new Date().getMinutes();
+      // Fail machine 2 during minute 15 and 45 of every hour for demo purposes
+      if (machine.id === 'm2' && (currentMinute === 15 || currentMinute === 45)) {
+           proposedStatus = MachineStatus.WARNING;
       }
 
-      if (machine.status === MachineStatus.WARNING) {
-          if (reading.temperature > 85 || reading.vibration > 7) {
-              newStatus = MachineStatus.CRITICAL;
-          } 
-          else if (Math.random() > 0.95) {
-              newStatus = MachineStatus.NORMAL;
+      // Hysteresis Check
+      const tracker = this.statusCounters.get(machine.id) || { count: 0, status: machine.status };
+
+      if (proposedStatus !== machine.status) {
+          if (tracker.status === proposedStatus) {
+              tracker.count++;
+          } else {
+              tracker.status = proposedStatus;
+              tracker.count = 1;
           }
+      } else {
+          tracker.count = 0; // Reset if we match current status
       }
+      
+      this.statusCounters.set(machine.id, tracker);
 
-      if (newStatus === MachineStatus.CRITICAL) {
-          const isFreshCritical = machine.status !== MachineStatus.CRITICAL;
-          
-          if (isFreshCritical) {
+      // Threshold: Needs 3 ticks (6 seconds) to change state
+      if (tracker.count >= 3) {
+           if (proposedStatus === MachineStatus.CRITICAL && machine.status !== MachineStatus.CRITICAL) {
               newAlert = {
                   id: Math.random().toString(36).substr(2, 9),
                   machineId: machine.id,
                   machineName: machine.name,
-                  timestamp: Date.now(),
+                  timestamp: reading.timestamp,
                   severity: 'high',
-                  message: `Critical failure imminent: ${reading.vibration > 6 ? 'Excessive Vibration' : 'Overheating Detected'}`,
-                  value: reading.vibration > 6 ? reading.vibration : reading.temperature,
-                  sensorType: reading.vibration > 6 ? 'Vibration' : 'Temperature'
+                  message: `Critical: ${reading.vibration > 7 ? 'Excessive Vibration' : 'Overheating'}`,
+                  value: reading.vibration > 7 ? reading.vibration : reading.temperature,
+                  sensorType: reading.vibration > 7 ? 'Vibration' : 'Temperature'
               };
-          }
+           }
+           // Reset counter after state change
+           tracker.count = 0; 
+           this.statusCounters.set(machine.id, tracker);
+           return { status: proposedStatus, newAlert };
       }
 
-      return { status: newStatus, newAlert };
+      return { status: machine.status };
   }
 
   private addAlert(alert: Alert) {
+      // Dedup alerts
       const recentAlert = this.alerts.find(a => 
           a.machineId === alert.machineId && 
           (Date.now() - a.timestamp) < 10000

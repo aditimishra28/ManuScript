@@ -25,8 +25,10 @@ import { pipeline } from './services/pipeline';
 type ViewState = 'dashboard' | 'alerts' | 'machines' | 'settings';
 
 const App = () => {
-  // Auth State
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // Auth State (persisted in session storage)
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+      return sessionStorage.getItem('sentinai_auth') === 'true';
+  });
   
   // App State
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -38,6 +40,17 @@ const App = () => {
   
   // Modal State
   const [showWizard, setShowWizard] = useState(false);
+
+  const handleLogin = () => {
+      sessionStorage.setItem('sentinai_auth', 'true');
+      setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+      sessionStorage.removeItem('sentinai_auth');
+      setIsAuthenticated(false);
+      pipeline.stop();
+  };
 
   // Initialize Pipeline Subscription
   useEffect(() => {
@@ -64,11 +77,6 @@ const App = () => {
         };
     }
   }, [isAuthenticated]);
-
-  const handleLogout = () => {
-      setIsAuthenticated(false);
-      pipeline.stop();
-  };
 
   const getStatusColor = (status: MachineStatus) => {
     switch (status) {
@@ -279,7 +287,7 @@ const App = () => {
 
   // If not authenticated, show Auth Screen
   if (!isAuthenticated) {
-      return <AuthScreen onLogin={() => setIsAuthenticated(true)} />;
+      return <AuthScreen onLogin={handleLogin} />;
   }
 
   return (

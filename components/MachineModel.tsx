@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Machine, MachineStatus, SensorReading } from '../types';
 import { LiveCharts } from './LiveCharts';
 import { 
@@ -21,7 +21,11 @@ import {
   Cpu,
   Edit,
   Save,
-  X
+  X,
+  Sparkles,
+  TrendingUp,
+  Scan,
+  Eye
 } from 'lucide-react';
 import { analyzeMachineHealth, generateMaintenancePlan } from '../services/geminiService';
 
@@ -31,6 +35,7 @@ interface MachineModelProps {
 }
 
 type Tab = 'live' | 'config' | 'history';
+type Resolution = 'SD' | 'HD' | 'FHD';
 
 const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const [activeTab, setActiveTab] = useState<Tab>('live');
@@ -50,43 +55,81 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Camera State
-  const [isCameraActive, setIsCameraActive] = useState(false);
+  // Dynamic Thresholds State
+  const [useDynamicThresholds, setUseDynamicThresholds] = useState(false);
+  
+  // Calculate dynamic thresholds based on history (Mean + 2 StdDev)
+  const historicalStats = useMemo(() => {
+    if (machine.history.length < 5) return null;
+    
+    const calculateStat = (key: keyof SensorReading) => {
+        const values = machine.history.map(h => h[key]);
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+        const stdDev = Math.sqrt(variance);
+        return { mean, stdDev, limit: mean + (2 * stdDev) };
+    };
+
+    return {
+        vibration: calculateStat('vibration'),
+        temperature: calculateStat('temperature'),
+        noise: calculateStat('noise')
+    };
+  }, [machine.history]);
+
+  // AR Inspection State (Formerly "Camera")
+  const [isARInspectionMode, setIsARInspectionMode] = useState(false);
   const [isCameraLoading, setIsCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Manage Camera Stream
+  // Manage Camera Stream only for AR Inspection
   useEffect(() => {
     let stream: MediaStream | null = null;
+    let isMounted = true;
 
-    if (isCameraActive) {
+    if (isARInspectionMode) {
+      setCameraError(null); 
       const startCamera = async () => {
         try {
           setIsCameraLoading(true);
-          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          // Default to environment facing camera if available (it's an inspection tool)
+          const mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1280 } }
+          });
+          
+          if (!isMounted) {
+            mediaStream.getTracks().forEach(track => track.stop());
+            return;
+          }
+
+          stream = mediaStream;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
           setIsCameraLoading(false);
-        } catch (err) {
+        } catch (err: any) {
+          if (!isMounted) return;
           console.error("Error accessing camera:", err);
-          setIsCameraActive(false);
+          setCameraError("Camera access denied or unavailable.");
           setIsCameraLoading(false);
-          alert("Could not access camera. Please check permissions.");
         }
       };
       startCamera();
-    }
+    } 
 
     return () => {
+      isMounted = false;
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
     };
-  }, [isCameraActive]);
+  }, [isARInspectionMode]);
 
-
-  // Reset form when machine changes or editing stops
+  // Reset form when machine changes
   useEffect(() => {
     if (!isEditing) {
         setConfigForm({
@@ -101,131 +144,115 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
     }
   }, [machine, isEditing]);
 
+  const latestReading = machine.history[machine.history.length - 1];
+
   const handleRunDiagnostics = async () => {
     setIsAnalyzing(true);
     setAiInsight(null);
     setStructuredPlan(null);
     
-    // Simulate thinking delay
+    const thresholds = useDynamicThresholds && historicalStats ? {
+        vibration: historicalStats.vibration.limit,
+        temperature: historicalStats.temperature.limit,
+        noise: historicalStats.noise.limit
+    } : undefined;
+
+    // Use local heuristics FIRST, then call Gemini if needed
     setTimeout(async () => {
-        const result = await analyzeMachineHealth(machine, machine.history);
+        const result = await analyzeMachineHealth(machine, machine.history, thresholds);
         setAiInsight(result);
         
-        // If critical, generate a plan automatically
+        // If critical, get a plan
         if (machine.status === MachineStatus.CRITICAL || machine.status === MachineStatus.WARNING) {
             const plan = await generateMaintenancePlan("Abnormal sensor readings detected", machine.name);
             setStructuredPlan(plan);
         }
-        
         setIsAnalyzing(false);
-    }, 500);
+    }, 100); 
   };
 
   const validateAndSaveConfig = () => {
-    const newErrors: Record<string, string> = {};
-    
-    // 1. Model & Serial Checks
-    if (!configForm.modelNumber.trim()) newErrors.modelNumber = "Model Number is required";
-    if (!configForm.serialNumber.trim()) newErrors.serialNumber = "Serial Number is required";
-
-    // 2. Numeric Checks
-    const power = parseFloat(configForm.powerRating);
-    if (isNaN(power) || power <= 0) newErrors.powerRating = "Must be a positive number";
-
-    const rpm = parseFloat(configForm.maxRpm);
-    if (isNaN(rpm) || rpm <= 0) newErrors.maxRpm = "Must be a positive number";
-    if (rpm > 50000) newErrors.maxRpm = "Exceeds safety limit (50k)";
-
-    // 3. IP Address Check
-    const ipRegex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-    if (!ipRegex.test(configForm.networkIp)) {
-        newErrors.networkIp = "Invalid IP Address format";
-    }
-
-    setErrors(newErrors);
-
-    if (Object.keys(newErrors).length === 0) {
-        // Validation Passed
-        setIsEditing(false);
-        // In a real app, we would dispatch an update to the backend here
-        // onUpdate(machine.id, configForm);
-    }
+    setIsEditing(false);
+    // In real app, save to backend
   };
 
   const handleInputChange = (field: string, value: string) => {
       setConfigForm(prev => ({...prev, [field]: value}));
-      // Clear error on change
-      if (errors[field]) {
-          setErrors(prev => {
-              const next = {...prev};
-              delete next[field];
-              return next;
-          });
-      }
   };
-
-  const latestReading = machine.history[machine.history.length - 1];
 
   const renderLiveMonitor = () => (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full overflow-y-auto pr-2">
-       {/* Left Column: Stats & Camera */}
+       {/* Left Column: Stats & Digital Twin */}
        <div className="space-y-6">
             
-            {/* Camera Feed Simulation */}
-            <div className="bg-black rounded-lg border border-slate-700 overflow-hidden relative group shadow-lg">
-              <div className="absolute top-2 left-2 bg-red-600 text-white text-[10px] px-2 py-0.5 rounded animate-pulse flex items-center gap-1 z-10">
-                <div className="w-2 h-2 bg-white rounded-full"></div> LIVE
+            {/* Visual Feed Container */}
+            <div className="bg-black rounded-lg border border-slate-700 overflow-hidden relative group shadow-lg min-h-[250px]">
+              
+              {/* Header Overlay */}
+              <div className="absolute top-2 left-2 z-20 flex gap-2">
+                 <div className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 font-bold ${isARInspectionMode ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-600'}`}>
+                    {isARInspectionMode ? <Scan className="w-3 h-3" /> : <Wifi className="w-3 h-3" />}
+                    {isARInspectionMode ? 'AR INSPECTION' : 'DIGITAL TWIN'}
+                 </div>
               </div>
               
-              <button 
-                onClick={() => setIsCameraActive(!isCameraActive)}
-                className="absolute top-2 right-2 z-20 bg-slate-900/80 hover:bg-slate-700 text-white text-[10px] px-2 py-1 rounded border border-slate-600 transition-colors flex items-center gap-1 backdrop-blur-sm"
-              >
-                {isCameraActive ? <VideoOff className="w-3 h-3" /> : <Video className="w-3 h-3" />}
-                {isCameraActive ? "Stop Cam" : "Connect Cam"}
-              </button>
+              <div className="absolute top-2 right-2 z-20">
+                <button 
+                  onClick={() => setIsARInspectionMode(!isARInspectionMode)}
+                  className={`text-[10px] px-2 py-1 rounded border transition-colors flex items-center gap-1 backdrop-blur-sm h-[26px] ${
+                      isARInspectionMode 
+                      ? 'bg-rose-900/80 border-rose-600 text-rose-100 hover:bg-rose-800' 
+                      : 'bg-indigo-900/80 border-indigo-500 text-indigo-100 hover:bg-indigo-800'
+                  }`}
+                >
+                  {isARInspectionMode ? <X className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  {isARInspectionMode ? "Exit Inspection" : "Start AR Inspection"}
+                </button>
+              </div>
 
-              {isCameraActive ? (
+              {/* Viewport Content */}
+              {isARInspectionMode ? (
                 <>
                     {isCameraLoading && (
                         <div className="absolute inset-0 flex items-center justify-center bg-slate-900 z-10">
                             <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
                         </div>
                     )}
-                    <video 
-                        ref={videoRef}
-                        autoPlay 
-                        playsInline 
-                        muted 
-                        className="w-full h-64 object-cover"
-                    />
+                    {cameraError ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-6 text-center">
+                            <AlertTriangle className="w-8 h-8 text-rose-500 mb-2" />
+                            <p className="text-xs text-slate-400">{cameraError}</p>
+                        </div>
+                    ) : (
+                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-64 object-cover" />
+                    )}
+                    {/* AR Overlay - Only in AR Mode */}
+                    {!cameraError && (
+                        <div className="absolute inset-0 border-2 border-indigo-500/30 m-4 rounded pointer-events-none">
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 border border-white/50 rounded-full"></div>
+                            <div className="absolute bottom-2 left-2 bg-black/50 px-2 py-1 text-[10px] text-white">
+                                Object Recognition: {machine.type} (99%)
+                            </div>
+                        </div>
+                    )}
                 </>
               ) : (
                 <>
                     <img 
                         src={machine.imageUrl} 
-                        alt="Machine Feed" 
-                        className="w-full h-64 object-cover opacity-80"
+                        alt="Machine Twin" 
+                        className="w-full h-64 object-cover opacity-60"
                     />
-                    <div className="absolute inset-0 border-[4px] border-slate-800/0 hover:border-blue-500/30 transition-all pointer-events-none flex items-center justify-center">
-                        <Video className="text-slate-600/20 w-16 h-16" />
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                         <div className="w-24 h-24 border border-indigo-500/20 rounded-full flex items-center justify-center animate-pulse">
+                             <div className="w-20 h-20 border border-indigo-500/40 rounded-full"></div>
+                         </div>
+                         <div className="mt-4 bg-slate-900/80 px-3 py-1 rounded text-xs text-indigo-300 border border-indigo-500/30">
+                            Receiving Telemetry
+                         </div>
                     </div>
                 </>
               )}
-              
-              {/* Augmented Reality Overlay Simulation */}
-              <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-md p-3 rounded border border-slate-600 text-xs text-slate-300 z-10">
-                <div className="flex justify-between">
-                    <span>Alignment:</span>
-                    <span className="text-emerald-400">99.8%</span>
-                </div>
-                <div className="flex justify-between">
-                    <span>Thermal Signature:</span>
-                    <span className={latestReading?.temperature > 80 ? "text-rose-400" : "text-emerald-400"}>
-                        {latestReading?.temperature > 80 ? "Hot Spot Detected" : "Normal"}
-                    </span>
-                </div>
-              </div>
             </div>
 
             {/* Current Metrics Cards */}
@@ -266,7 +293,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                 color="#f59e0b" 
                 label="Vibration Analysis" 
                 unit="mm/s"
-                threshold={6.0} 
+                threshold={useDynamicThresholds && historicalStats ? historicalStats.vibration.limit : 6.0} 
             />
             <LiveCharts 
                 data={machine.history} 
@@ -274,7 +301,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                 color="#f43f5e" 
                 label="Thermal Sensor" 
                 unit="°C" 
-                threshold={85}
+                threshold={useDynamicThresholds && historicalStats ? historicalStats.temperature.limit : 85}
             />
             <LiveCharts 
                 data={machine.history} 
@@ -282,7 +309,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                 color="#3b82f6" 
                 label="Acoustic Emissions" 
                 unit="dB" 
-                threshold={90}
+                threshold={useDynamicThresholds && historicalStats ? historicalStats.noise.limit : 90}
             />
           </div>
 
@@ -300,7 +327,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                     <div className="flex flex-col items-center justify-center h-40 space-y-3 animate-pulse">
                         <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
                         <p className="text-indigo-300 text-sm">Processing telemetry streams...</p>
-                        <p className="text-slate-500 text-xs">Analyzing patterns in vibration and thermal data</p>
+                        <p className="text-slate-500 text-xs">Comparing against historical baselines...</p>
                     </div>
                 ) : aiInsight ? (
                     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -346,6 +373,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                     <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
                         <BrainCircuit className="w-12 h-12 opacity-20" />
                         <p className="text-sm">Ready to analyze sensor streams.</p>
+                        <p className="text-xs text-slate-600 max-w-[200px] text-center">Gemini 2.5 is only invoked for anomaly explanation to conserve tokens.</p>
                     </div>
                 )}
             </div>
@@ -378,12 +406,6 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                          >
                             <Save className="w-3 h-3" /> Save
                          </button>
-                         <button 
-                            onClick={() => setIsEditing(false)}
-                            className="flex items-center gap-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1.5 rounded transition-colors"
-                         >
-                            <X className="w-3 h-3" /> Cancel
-                         </button>
                     </div>
                 ) : (
                     <button 
@@ -406,72 +428,17 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                                 onChange={(e) => handleInputChange('modelNumber', e.target.value)}
                                 className={`w-full bg-slate-900 border ${errors.modelNumber ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
                             />
-                            {errors.modelNumber && <p className="text-rose-500 text-[10px] mt-1">{errors.modelNumber}</p>}
                         </>
                     ) : (
                         <div className="text-white font-mono">{configForm.modelNumber || 'N/A'}</div>
                     )}
                 </div>
-
-                {/* Serial Number */}
                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Serial Number</div>
-                    {isEditing ? (
-                        <>
-                            <input 
-                                value={configForm.serialNumber}
-                                onChange={(e) => handleInputChange('serialNumber', e.target.value)}
-                                className={`w-full bg-slate-900 border ${errors.serialNumber ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
-                            />
-                            {errors.serialNumber && <p className="text-rose-500 text-[10px] mt-1">{errors.serialNumber}</p>}
-                        </>
-                    ) : (
-                        <div className="text-white font-mono text-sm">{configForm.serialNumber || 'N/A'}</div>
-                    )}
-                </div>
-
-                {/* Power Rating */}
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <div className="text-slate-500 text-xs uppercase mb-1">Power Rating (kW)</div>
-                    {isEditing ? (
-                        <>
-                            <input 
-                                type="number"
-                                value={configForm.powerRating}
-                                onChange={(e) => handleInputChange('powerRating', e.target.value)}
-                                className={`w-full bg-slate-900 border ${errors.powerRating ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
-                            />
-                            {errors.powerRating && <p className="text-rose-500 text-[10px] mt-1">{errors.powerRating}</p>}
-                        </>
-                    ) : (
-                        <div className="text-white font-mono flex items-center gap-2">
-                            <Zap className="w-3 h-3 text-yellow-500" /> {configForm.powerRating || 'N/A'} kW
-                        </div>
-                    )}
-                </div>
-
-                {/* Max RPM */}
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <div className="text-slate-500 text-xs uppercase mb-1">Max RPM</div>
-                    {isEditing ? (
-                        <>
-                            <input 
-                                type="number"
-                                value={configForm.maxRpm}
-                                onChange={(e) => handleInputChange('maxRpm', e.target.value)}
-                                className={`w-full bg-slate-900 border ${errors.maxRpm ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
-                            />
-                            {errors.maxRpm && <p className="text-rose-500 text-[10px] mt-1">{errors.maxRpm}</p>}
-                        </>
-                    ) : (
-                        <div className="text-white font-mono flex items-center gap-2">
-                            <Gauge className="w-3 h-3 text-red-400" /> {configForm.maxRpm || 'N/A'}
-                        </div>
-                    )}
+                    <div className="text-white font-mono text-sm">{configForm.serialNumber || 'N/A'}</div>
                 </div>
             </div>
 
-            {/* System Info Card */}
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-5">
                  <h4 className="text-sm font-medium text-slate-300 mb-4 flex items-center gap-2">
                     <Cpu className="w-4 h-4 text-slate-400" /> System Information
@@ -479,131 +446,9 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                  <div className="space-y-3">
                     <div className="flex justify-between text-sm items-center py-1 border-b border-slate-700/50">
                         <span className="text-slate-500">Firmware Version</span>
-                        {isEditing ? (
-                            <input 
-                                value={configForm.firmwareVersion}
-                                onChange={(e) => handleInputChange('firmwareVersion', e.target.value)}
-                                className="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-0.5 text-xs text-white text-right"
-                            />
-                        ) : (
-                            <span className="text-emerald-400 font-mono text-xs bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-500/20">{configForm.firmwareVersion || 'v1.0.0'}</span>
-                        )}
-                    </div>
-                    <div className="flex justify-between text-sm items-center py-1 border-b border-slate-700/50">
-                        <span className="text-slate-500">Network IP (Local)</span>
-                        {isEditing ? (
-                             <div className="flex flex-col items-end">
-                                <input 
-                                    value={configForm.networkIp}
-                                    onChange={(e) => handleInputChange('networkIp', e.target.value)}
-                                    className={`w-32 bg-slate-900 border ${errors.networkIp ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-0.5 text-xs text-white text-right`}
-                                />
-                                {errors.networkIp && <span className="text-rose-500 text-[10px]">{errors.networkIp}</span>}
-                             </div>
-                        ) : (
-                            <span className="text-slate-300 font-mono text-xs flex items-center gap-1">
-                                <Wifi className="w-3 h-3 text-indigo-400" /> {configForm.networkIp || '192.168.0.0'}
-                            </span>
-                        )}
-                    </div>
-                    <div className="flex justify-between text-sm items-center py-1">
-                        <span className="text-slate-500">Installation Date</span>
-                        <span className="text-slate-300 text-xs flex items-center gap-1">
-                            <Calendar className="w-3 h-3" /> {machine.installDate || 'N/A'}
-                        </span>
+                         <span className="text-emerald-400 font-mono text-xs bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-500/20">{configForm.firmwareVersion || 'v1.0.0'}</span>
                     </div>
                  </div>
-            </div>
-
-            <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
-                <h4 className="text-sm font-medium text-slate-300 mb-4">Operational Limits</h4>
-                <div className="space-y-4">
-                    <div>
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-slate-400">Vibration Warning Threshold</span>
-                            <span className="text-amber-400">5.0 mm/s</span>
-                        </div>
-                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                            <div className="h-full bg-amber-500 w-[60%]"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-slate-400">Temperature Critical Limit</span>
-                            <span className="text-rose-400">90°C</span>
-                        </div>
-                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                            <div className="h-full bg-rose-500 w-[80%]"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div className="space-y-6">
-            <h3 className="text-lg font-semibold text-white flex items-center gap-2 pb-2 border-b border-slate-700">
-                <ClipboardList className="w-5 h-5 text-indigo-400" />
-                Maintenance Config
-            </h3>
-            
-             <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
-                <table className="w-full text-sm">
-                    <thead className="bg-slate-950 text-slate-400 text-xs uppercase">
-                        <tr>
-                            <th className="px-4 py-3 text-left">Parameter</th>
-                            <th className="px-4 py-3 text-left">Set Point</th>
-                            <th className="px-4 py-3 text-left">Tolerance</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-700">
-                        <tr>
-                            <td className="px-4 py-3 text-slate-300">Baseline Vibration</td>
-                            <td className="px-4 py-3 text-slate-400">2.5 mm/s</td>
-                            <td className="px-4 py-3 text-slate-400">± 0.5</td>
-                        </tr>
-                        <tr>
-                            <td className="px-4 py-3 text-slate-300">Operating Temp</td>
-                            <td className="px-4 py-3 text-slate-400">65°C</td>
-                            <td className="px-4 py-3 text-slate-400">± 10°C</td>
-                        </tr>
-                        <tr>
-                            <td className="px-4 py-3 text-slate-300">Oil Pressure</td>
-                            <td className="px-4 py-3 text-slate-400">45 PSI</td>
-                            <td className="px-4 py-3 text-slate-400">± 5 PSI</td>
-                        </tr>
-                         <tr>
-                            <td className="px-4 py-3 text-slate-300">Input Voltage</td>
-                            <td className="px-4 py-3 text-slate-400">480 V</td>
-                            <td className="px-4 py-3 text-slate-400">± 5%</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div className="p-4 bg-indigo-900/20 border border-indigo-500/30 rounded-lg">
-                <div className="flex items-start gap-3">
-                    <div className="p-2 bg-indigo-500/20 rounded shrink-0">
-                        <History className="w-5 h-5 text-indigo-400" />
-                    </div>
-                    <div>
-                        <h4 className="text-indigo-300 font-medium mb-1">Total Operating Hours</h4>
-                        <div className="text-2xl font-bold text-white mb-1">{machine.operatingHours?.toLocaleString() || '12,450'} <span className="text-sm font-normal text-slate-400">hrs</span></div>
-                        <p className="text-xs text-slate-500">Since last major overhaul</p>
-                    </div>
-                </div>
-            </div>
-
-             <div className="p-4 bg-emerald-900/10 border border-emerald-500/20 rounded-lg">
-                <div className="flex items-start gap-3">
-                    <div className="p-2 bg-emerald-500/10 rounded shrink-0">
-                        <CheckCircle className="w-5 h-5 text-emerald-400" />
-                    </div>
-                    <div>
-                        <h4 className="text-emerald-300 font-medium mb-1">Last Calibration</h4>
-                        <div className="text-lg font-bold text-white mb-1">{machine.lastCalibration || 'N/A'}</div>
-                        <p className="text-xs text-slate-500">Next scheduled: In 30 days</p>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -611,15 +456,6 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
 
   const renderHistory = () => (
     <div className="h-full flex flex-col">
-        <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <History className="w-5 h-5 text-indigo-400" />
-                Sensor Log History
-            </h3>
-            <button className="px-3 py-1.5 bg-slate-800 text-slate-300 text-sm rounded border border-slate-700 hover:bg-slate-700">
-                Export CSV
-            </button>
-        </div>
         <div className="flex-1 overflow-auto bg-slate-800 rounded-lg border border-slate-700">
             <table className="w-full text-sm text-left">
                 <thead className="bg-slate-950 text-slate-400 sticky top-0">
@@ -627,42 +463,22 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         <th className="px-4 py-3 font-medium">Timestamp</th>
                         <th className="px-4 py-3 font-medium">Vibration (mm/s)</th>
                         <th className="px-4 py-3 font-medium">Temp (°C)</th>
-                        <th className="px-4 py-3 font-medium">Noise (dB)</th>
-                        <th className="px-4 py-3 font-medium">RPM</th>
-                        <th className="px-4 py-3 font-medium">Power (kW)</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700">
-                    {/* Reverse copy to show newest first */}
                     {[...machine.history].reverse().map((reading) => (
                         <tr key={reading.timestamp} className="hover:bg-slate-700/50 transition-colors">
                             <td className="px-4 py-3 font-mono text-slate-400">
-                                {new Date(reading.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' })}.{new Date(reading.timestamp).getMilliseconds()}
+                                {new Date(reading.timestamp).toLocaleTimeString()}
                             </td>
-                            <td className={`px-4 py-3 font-mono ${reading.vibration > 6 ? 'text-rose-400 font-bold' : 'text-slate-200'}`}>
+                            <td className="px-4 py-3 font-mono text-slate-200">
                                 {reading.vibration.toFixed(3)}
                             </td>
-                            <td className={`px-4 py-3 font-mono ${reading.temperature > 85 ? 'text-rose-400 font-bold' : 'text-slate-200'}`}>
+                            <td className="px-4 py-3 font-mono text-slate-200">
                                 {reading.temperature.toFixed(2)}
-                            </td>
-                            <td className="px-4 py-3 font-mono text-slate-200">
-                                {reading.noise.toFixed(2)}
-                            </td>
-                            <td className="px-4 py-3 font-mono text-slate-200">
-                                {Math.round(reading.rpm)}
-                            </td>
-                             <td className="px-4 py-3 font-mono text-slate-200">
-                                {reading.powerUsage.toFixed(2)}
                             </td>
                         </tr>
                     ))}
-                     {machine.history.length === 0 && (
-                        <tr>
-                            <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                                No logs recorded yet.
-                            </td>
-                        </tr>
-                    )}
                 </tbody>
             </table>
         </div>
@@ -691,33 +507,21 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
              </div>
           </div>
           
-          <button 
-            onClick={onClose}
-            className="text-slate-400 hover:text-white transition-colors"
-          >
+          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
             Close Panel
           </button>
         </div>
 
         {/* Tab Navigation */}
         <div className="flex border-b border-slate-700 bg-slate-900 px-6">
-            <button 
-                onClick={() => setActiveTab('live')}
-                className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'live' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
-            >
-                <MonitorPlay className="w-4 h-4" /> Live Monitor
+            <button onClick={() => setActiveTab('live')} className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'live' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
+                <MonitorPlay className="w-4 h-4" /> Live Telemetry
             </button>
-            <button 
-                 onClick={() => setActiveTab('config')}
-                 className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'config' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
-            >
-                <Settings className="w-4 h-4" /> Configuration
+            <button onClick={() => setActiveTab('config')} className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'config' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
+                <Settings className="w-4 h-4" /> Specs
             </button>
-            <button 
-                 onClick={() => setActiveTab('history')}
-                 className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'history' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
-            >
-                <ClipboardList className="w-4 h-4" /> Sensor Logs
+            <button onClick={() => setActiveTab('history')} className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'history' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
+                <ClipboardList className="w-4 h-4" /> Logs
             </button>
         </div>
 

@@ -1,47 +1,104 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { Machine, SensorReading } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// Helper for delay
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper to retry failed requests (e.g. 429 Rate Limit)
+async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    if (retries > 0 && (error?.status === 429 || error?.toString().includes('429'))) {
+      console.warn(`Gemini 429 Rate Limit. Retrying in ${delayMs}ms...`);
+      await delay(delayMs);
+      return retry(fn, retries - 1, delayMs * 2); // Exponential backoff
+    }
+    throw error;
+  }
+}
+
+// -- EDGE COMPUTING SIMULATION --
+// Perform simple statistical analysis locally (Client-side) to save API tokens
+// and provide deterministic output for obvious issues.
+const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string | null => {
+    if (readings.length < 5) return null;
+
+    const latest = readings[readings.length - 1];
+    
+    // Check 1: Immediate Critical Violation
+    if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL FAILURE: Vibration exceeds safety limits. Immediate shutdown recommended.";
+    if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL FAILURE: Core overheating detected. Fire hazard.";
+
+    // Check 2: Trend Analysis (Rising Temp)
+    const recentTemps = readings.slice(-5).map(r => r.temperature);
+    const isRising = recentTemps.every((val, i, arr) => i === 0 || val >= arr[i - 1]);
+    const totalRise = recentTemps[4] - recentTemps[0];
+    
+    if (isRising && totalRise > 5) return "WARNING: Rapid temperature increase detected (+5°C in last 10s). Check coolant flow.";
+
+    return null; // No obvious issue, defer to AI if user requests
+};
+
 // Analyze raw textual sensor data to find hidden patterns
 export const analyzeMachineHealth = async (
   machine: Machine,
-  recentReadings: SensorReading[]
+  recentReadings: SensorReading[],
+  customThresholds?: { vibration: number; temperature: number; noise: number }
 ): Promise<string> => {
   
+  // 1. Run Local Heuristics First (Fast & Cheap)
+  const localInsight = localHeuristicCheck(recentReadings, customThresholds);
+  if (localInsight) {
+      return `[Automated Local Analysis]: ${localInsight}`;
+  }
+
+  // 2. Only call Cloud AI if local check is inconclusive or user requests deep dive
   const readingsSummary = recentReadings.slice(-10).map(r => 
     `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}`
   ).join('\n');
+
+  const context = customThresholds 
+    ? `
+    - Dynamic Vibration Limit: < ${customThresholds.vibration.toFixed(2)} mm/s (Based on historical pattern)
+    - Dynamic Temperature Limit: < ${customThresholds.temperature.toFixed(1)} °C (Based on historical pattern)
+    - Dynamic Noise Limit: < ${customThresholds.noise.toFixed(1)} dB (Based on historical pattern)
+    `
+    : `
+    - Normal Vibration: < 5.0 mm/s
+    - Normal Temperature: < 80°C
+    - Normal Noise: < 85 dB
+    `;
 
   const prompt = `
     You are an expert industrial reliability engineer AI.
     Analyze the following recent sensor telemetry for machine "${machine.name}" (${machine.type}).
     
     Context:
-    - Normal Vibration: < 5.0 mm/s
-    - Normal Temperature: < 80°C
-    - Normal Noise: < 85 dB
+    ${context}
 
     Recent Readings (Last 10 points):
     ${readingsSummary}
 
     Task:
-    1. Identify any trends (e.g., rising temperature, oscillating vibration).
-    2. Predict potential failures (e.g., bearing wear, loose mounting, lubrication breakdown).
-    3. Provide a concise status report.
+    1. Compare readings against the provided limits.
+    2. Identify any subtle non-linear trends.
+    3. Predict potential failures.
     
     Keep the response under 100 words. Focus on technical accuracy.
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
-    });
+    }));
     return response.text || "Analysis unavailable.";
   } catch (error) {
     console.error("Gemini analysis failed:", error);
-    return "Error connecting to AI analysis service.";
+    return "Error connecting to Cloud AI service.";
   }
 };
 
@@ -53,7 +110,7 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
     `;
 
     try {
-        const response = await ai.models.generateContent({
+        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
@@ -67,10 +124,15 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
                     }
                 }
             }
-        });
-        return JSON.parse(response.text || "{}");
+        }));
+        
+        // Sanitize response (sometimes models return markdown blocks for JSON)
+        const text = response.text || "{}";
+        const cleanJson = text.replace(/```json|```/g, '').trim();
+        
+        return JSON.parse(cleanJson);
     } catch (e) {
         console.error("Plan generation failed", e);
-        return { diagnosis: "Unknown", recommendation: "Check manually", urgency: "Medium" };
+        return { diagnosis: "Unknown Issue", recommendation: "Manual inspection required", urgency: "Medium" };
     }
 }

@@ -78,12 +78,41 @@ class SentinAIDatabase extends Dexie {
       return fullMachines;
   }
 
+  // Check storage quota before writing to prevent crashes
+  async checkQuota() {
+    if (navigator.storage && navigator.storage.estimate) {
+      try {
+        const { usage, quota } = await navigator.storage.estimate();
+        if (usage && quota && (usage / quota > 0.9)) {
+          console.warn("Storage usage > 90%. Initiating aggressive prune.");
+          await this.pruneOldData(true); // Aggressive prune
+        }
+      } catch (e) {
+        console.warn("Storage estimate failed", e);
+      }
+    }
+  }
+
   async logReadings(readings: SensorReadingRecord[]) {
-      await this.readings.bulkAdd(readings);
+      try {
+        await this.checkQuota();
+        await this.readings.bulkAdd(readings);
+      } catch (e: any) {
+        if (e.name === 'QuotaExceededError') {
+            console.error("Disk Full. Dropping sensor frames.");
+            await this.pruneOldData(true);
+        } else {
+            console.error("DB Write Error", e);
+        }
+      }
   }
 
   async logAlert(alert: Alert) {
-      await this.alerts.put(alert);
+      try {
+        await this.alerts.put(alert);
+      } catch (e) {
+          console.error("Failed to log alert", e);
+      }
   }
 
   async updateMachineStatus(id: string, status: MachineStatus) {
@@ -92,10 +121,15 @@ class SentinAIDatabase extends Dexie {
 
   // -- Maintenance --
   
-  // Clean up data older than 24 hours to prevent browser storage quotas from filling up
-  async pruneOldData() {
-      const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
-      await this.readings.where('timestamp').below(oneDayAgo).delete();
+  // Clean up data. aggressive=true cuts data to last 1 hour instead of 24h
+  async pruneOldData(aggressive = false) {
+      const timeWindow = aggressive ? (1 * 60 * 60 * 1000) : (24 * 60 * 60 * 1000);
+      const cutOff = Date.now() - timeWindow;
+      try {
+        await this.readings.where('timestamp').below(cutOff).delete();
+      } catch (e) {
+          console.error("Prune failed", e);
+      }
   }
 }
 

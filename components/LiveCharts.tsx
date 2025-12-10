@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   LineChart,
   Line,
@@ -20,7 +20,7 @@ interface LiveChartsProps {
   threshold?: number;
 }
 
-export const LiveCharts: React.FC<LiveChartsProps> = ({ 
+export const LiveCharts: React.FC<LiveChartsProps> = React.memo(({ 
   data, 
   color, 
   dataKey, 
@@ -29,11 +29,11 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
   threshold 
 }) => {
   
-  // Format timestamp for X-Axis
-  const formattedData = data.map(d => ({
+  // Format timestamp for X-Axis, memoize to prevent recalc on every render
+  const formattedData = useMemo(() => data.map(d => ({
     ...d,
     timeStr: new Date(d.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second:'2-digit' })
-  }));
+  })), [data]);
 
   return (
     <div className="w-full h-48 bg-slate-800/50 rounded-lg p-4 border border-slate-700">
@@ -50,6 +50,7 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
             fontSize={10} 
             tick={{fill: '#94a3b8'}}
             interval="preserveStartEnd"
+            isAnimationActive={false}
           />
           <YAxis 
             stroke="#94a3b8" 
@@ -57,12 +58,14 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
             tick={{fill: '#94a3b8'}}
             domain={['auto', 'auto']}
             width={30}
+            isAnimationActive={false}
           />
           <Tooltip 
             contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', color: '#f1f5f9' }}
             itemStyle={{ color: color }}
             formatter={(value: number) => [`${value.toFixed(2)} ${unit}`, label]}
             labelStyle={{ color: '#94a3b8' }}
+            isAnimationActive={false}
           />
           {threshold && (
              <ReferenceLine y={threshold} stroke="red" strokeDasharray="3 3" label={{ position: 'top',  value: 'Limit', fill: 'red', fontSize: 10 }} />
@@ -73,11 +76,15 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
             stroke={color} 
             strokeWidth={2} 
             dot={false} 
-            animationDuration={300}
-            isAnimationActive={false} // smoother for real-time
+            animationDuration={0} // Disable animation for performance
+            isAnimationActive={false}
           />
         </LineChart>
       </ResponsiveContainer>
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+    // Custom comparison for memo: only re-render if data length changes or threshold changes
+    // This assumes data is appended immutably
+    return prevProps.data === nextProps.data && prevProps.threshold === nextProps.threshold;
+});
