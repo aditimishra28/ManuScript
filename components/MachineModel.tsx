@@ -52,6 +52,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
 
   // Camera State
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isCameraLoading, setIsCameraLoading] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // Manage Camera Stream
@@ -61,13 +62,16 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
     if (isCameraActive) {
       const startCamera = async () => {
         try {
+          setIsCameraLoading(true);
           stream = await navigator.mediaDevices.getUserMedia({ video: true });
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
+          setIsCameraLoading(false);
         } catch (err) {
           console.error("Error accessing camera:", err);
           setIsCameraActive(false);
+          setIsCameraLoading(false);
           alert("Could not access camera. Please check permissions.");
         }
       };
@@ -182,13 +186,20 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
               </button>
 
               {isCameraActive ? (
-                <video 
-                    ref={videoRef}
-                    autoPlay 
-                    playsInline 
-                    muted 
-                    className="w-full h-64 object-cover"
-                />
+                <>
+                    {isCameraLoading && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-slate-900 z-10">
+                            <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                    )}
+                    <video 
+                        ref={videoRef}
+                        autoPlay 
+                        playsInline 
+                        muted 
+                        className="w-full h-64 object-cover"
+                    />
+                </>
               ) : (
                 <>
                     <img 

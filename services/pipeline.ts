@@ -162,6 +162,34 @@ class ManufacturingPipeline {
     this.listeners.forEach(l => l(safeMachines, safeAlerts));
   }
 
+  // Register a new machine dynamically
+  public registerMachine(machineData: Partial<Machine>) {
+      const newMachine: Machine = {
+          id: `m${Date.now().toString().slice(-4)}`,
+          name: machineData.name || 'Unknown Machine',
+          type: machineData.type || 'Generic',
+          location: machineData.location || 'Warehouse',
+          status: MachineStatus.NORMAL,
+          lastMaintenance: new Date().toISOString().split('T')[0],
+          imageUrl: `https://picsum.photos/800/600?random=${Math.floor(Math.random() * 100)}`,
+          history: [],
+          modelNumber: machineData.modelNumber || 'GEN-001',
+          serialNumber: machineData.serialNumber || `SN-${Math.floor(Math.random() * 1000000)}`,
+          firmwareVersion: 'v1.0.0',
+          networkIp: machineData.networkIp || '192.168.1.200',
+          installDate: new Date().toISOString().split('T')[0],
+          maxRpm: 5000,
+          powerRating: 20,
+          maintenanceInterval: 1000,
+          operatingHours: 0,
+          lastCalibration: new Date().toISOString().split('T')[0]
+      };
+
+      this.machines.push(newMachine);
+      this.notify();
+      return newMachine;
+  }
+
   // The "Backend" Tick: Ingest, Analyze, Update
   private tick() {
     const updatedMachines = this.machines.map(machine => {
@@ -197,7 +225,7 @@ class ManufacturingPipeline {
       let newAlert: Alert | undefined;
 
       // Random Chaos Monkey: Randomly degrade healthy machines (Simulation Logic)
-      if (machine.status === MachineStatus.NORMAL && Math.random() > 0.98) {
+      if (machine.status === MachineStatus.NORMAL && Math.random() > 0.995) {
          newStatus = MachineStatus.WARNING;
       }
 

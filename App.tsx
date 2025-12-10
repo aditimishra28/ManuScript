@@ -12,45 +12,63 @@ import {
   Filter,
   Download,
   Shield,
-  User
+  User,
+  Plus,
+  LogOut
 } from 'lucide-react';
 import { Machine, MachineStatus, Alert } from './types';
 import MachineModel from './components/MachineModel';
+import AuthScreen from './components/AuthScreen';
+import MachineWizard from './components/MachineWizard';
 import { pipeline } from './services/pipeline';
 
 type ViewState = 'dashboard' | 'alerts' | 'machines' | 'settings';
 
 const App = () => {
+  // Auth State
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  
+  // App State
   const [machines, setMachines] = useState<Machine[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<ViewState>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Modal State
+  const [showWizard, setShowWizard] = useState(false);
 
   // Initialize Pipeline Subscription
   useEffect(() => {
-    // Start the backend pipeline
-    pipeline.start();
+    if (isAuthenticated) {
+        // Start the backend pipeline only after login
+        pipeline.start();
 
-    // Subscribe to real-time updates
-    const unsubscribe = pipeline.subscribe((updatedMachines, updatedAlerts) => {
-        setMachines(updatedMachines);
-        setAlerts(updatedAlerts);
-        
-        // Update selected machine state live if modal is open
-        setSelectedMachine(currentSelection => {
-            if (!currentSelection) return null;
-            return updatedMachines.find(m => m.id === currentSelection.id) || currentSelection;
+        // Subscribe to real-time updates
+        const unsubscribe = pipeline.subscribe((updatedMachines, updatedAlerts) => {
+            setMachines(updatedMachines);
+            setAlerts(updatedAlerts);
+            
+            // Update selected machine state live if modal is open
+            setSelectedMachine(currentSelection => {
+                if (!currentSelection) return null;
+                return updatedMachines.find(m => m.id === currentSelection.id) || currentSelection;
+            });
         });
-    });
 
-    // Cleanup on unmount
-    return () => {
-        unsubscribe();
-        pipeline.stop();
-    };
-  }, []);
+        // Cleanup on unmount or logout
+        return () => {
+            unsubscribe();
+            pipeline.stop();
+        };
+    }
+  }, [isAuthenticated]);
+
+  const handleLogout = () => {
+      setIsAuthenticated(false);
+      pipeline.stop();
+  };
 
   const getStatusColor = (status: MachineStatus) => {
     switch (status) {
@@ -156,6 +174,17 @@ const App = () => {
                 </div>
             );
         })}
+        {/* Add Machine Card */}
+        <div 
+            onClick={() => setShowWizard(true)}
+            className="group bg-slate-900/50 border border-slate-800 border-dashed rounded-xl p-5 cursor-pointer hover:bg-slate-800/80 hover:border-indigo-500/50 transition-all flex flex-col items-center justify-center min-h-[220px]"
+        >
+            <div className="w-16 h-16 rounded-full bg-slate-800 group-hover:bg-indigo-600/20 flex items-center justify-center transition-colors mb-4">
+                <Plus className="w-8 h-8 text-slate-400 group-hover:text-indigo-500" />
+            </div>
+            <h3 className="font-semibold text-white">Add New Asset</h3>
+            <p className="text-xs text-slate-500 mt-1">Configure & Pair Device</p>
+        </div>
     </div>
   );
 
@@ -248,6 +277,11 @@ const App = () => {
     </button>
   );
 
+  // If not authenticated, show Auth Screen
+  if (!isAuthenticated) {
+      return <AuthScreen onLogin={() => setIsAuthenticated(true)} />;
+  }
+
   return (
     <div className="flex h-screen bg-slate-950 text-slate-200 overflow-hidden font-sans">
       
@@ -266,6 +300,13 @@ const App = () => {
         </nav>
 
         <div className="p-4 border-t border-slate-800">
+            <button 
+                onClick={handleLogout}
+                className="flex items-center gap-3 w-full p-2 text-slate-500 hover:text-rose-400 hover:bg-slate-800/50 rounded-lg transition-colors mb-4"
+            >
+                <LogOut className="w-5 h-5" />
+                {isSidebarOpen && <span className="text-sm">Sign Out</span>}
+            </button>
             <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold text-xs">
                     OP
@@ -311,6 +352,12 @@ const App = () => {
                     </span>
                  )}
               </div>
+              <button 
+                onClick={() => setShowWizard(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+              >
+                  <Plus className="w-4 h-4" /> Add Machine
+              </button>
            </div>
         </header>
 
@@ -417,12 +464,19 @@ const App = () => {
         </div>
       </main>
 
-      {/* Detail Modal / Overlay */}
+      {/* Modals */}
       {selectedMachine && (
         <MachineModel 
             machine={selectedMachine} 
             onClose={() => setSelectedMachine(null)} 
         />
+      )}
+
+      {showWizard && (
+          <MachineWizard 
+            onClose={() => setShowWizard(false)}
+            onComplete={() => setShowWizard(false)}
+          />
       )}
 
     </div>
