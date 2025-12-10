@@ -15,7 +15,10 @@ import {
   ClipboardList,
   Calendar,
   Zap,
-  Gauge
+  Gauge,
+  Wifi,
+  Cpu,
+  Edit
 } from 'lucide-react';
 import { analyzeMachineHealth, generateMaintenancePlan } from '../services/geminiService';
 
@@ -224,20 +227,24 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const renderConfig = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 p-4 h-full overflow-y-auto">
         <div className="space-y-6">
-            <h3 className="text-lg font-semibold text-white flex items-center gap-2 pb-2 border-b border-slate-700">
-                <Settings className="w-5 h-5 text-indigo-400" />
-                Technical Specifications
-            </h3>
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <Settings className="w-5 h-5 text-indigo-400" />
+                    Technical Specifications
+                </h3>
+                <button className="text-xs flex items-center gap-1 text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded border border-slate-700">
+                    <Edit className="w-3 h-3" /> Edit Mode
+                </button>
+            </div>
+            
             <div className="grid grid-cols-2 gap-4">
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Model Number</div>
                     <div className="text-white font-mono">{machine.modelNumber || 'N/A'}</div>
                 </div>
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <div className="text-slate-500 text-xs uppercase mb-1">Installation Date</div>
-                    <div className="text-white font-mono flex items-center gap-2">
-                        <Calendar className="w-3 h-3" /> {machine.installDate || 'N/A'}
-                    </div>
+                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <div className="text-slate-500 text-xs uppercase mb-1">Serial Number</div>
+                    <div className="text-white font-mono text-sm">{machine.serialNumber || 'N/A'}</div>
                 </div>
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Power Rating</div>
@@ -251,6 +258,31 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         <Gauge className="w-3 h-3 text-red-400" /> {machine.maxRpm || 'N/A'}
                     </div>
                 </div>
+            </div>
+
+            {/* System Info Card */}
+            <div className="bg-slate-800 rounded-lg border border-slate-700 p-5">
+                 <h4 className="text-sm font-medium text-slate-300 mb-4 flex items-center gap-2">
+                    <Cpu className="w-4 h-4 text-slate-400" /> System Information
+                 </h4>
+                 <div className="space-y-3">
+                    <div className="flex justify-between text-sm items-center py-1 border-b border-slate-700/50">
+                        <span className="text-slate-500">Firmware Version</span>
+                        <span className="text-emerald-400 font-mono text-xs bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-500/20">{machine.firmwareVersion || 'v1.0.0'}</span>
+                    </div>
+                    <div className="flex justify-between text-sm items-center py-1 border-b border-slate-700/50">
+                        <span className="text-slate-500">Network IP (Local)</span>
+                        <span className="text-slate-300 font-mono text-xs flex items-center gap-1">
+                             <Wifi className="w-3 h-3 text-indigo-400" /> {machine.networkIp || '192.168.0.0'}
+                        </span>
+                    </div>
+                    <div className="flex justify-between text-sm items-center py-1">
+                        <span className="text-slate-500">Installation Date</span>
+                        <span className="text-slate-300 text-xs flex items-center gap-1">
+                            <Calendar className="w-3 h-3" /> {machine.installDate || 'N/A'}
+                        </span>
+                    </div>
+                 </div>
             </div>
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
@@ -272,15 +304,6 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         </div>
                         <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                             <div className="h-full bg-rose-500 w-[80%]"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <div className="flex justify-between text-xs mb-1">
-                            <span className="text-slate-400">Maintenance Cycle</span>
-                            <span className="text-blue-400">Every {machine.maintenanceInterval || 500} hours</span>
-                        </div>
-                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                            <div className="h-full bg-blue-500 w-[45%]"></div>
                         </div>
                     </div>
                 </div>
@@ -336,6 +359,19 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         <h4 className="text-indigo-300 font-medium mb-1">Total Operating Hours</h4>
                         <div className="text-2xl font-bold text-white mb-1">{machine.operatingHours?.toLocaleString() || '12,450'} <span className="text-sm font-normal text-slate-400">hrs</span></div>
                         <p className="text-xs text-slate-500">Since last major overhaul</p>
+                    </div>
+                </div>
+            </div>
+
+             <div className="p-4 bg-emerald-900/10 border border-emerald-500/20 rounded-lg">
+                <div className="flex items-start gap-3">
+                    <div className="p-2 bg-emerald-500/10 rounded shrink-0">
+                        <CheckCircle className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                        <h4 className="text-emerald-300 font-medium mb-1">Last Calibration</h4>
+                        <div className="text-lg font-bold text-white mb-1">{machine.lastCalibration || 'N/A'}</div>
+                        <p className="text-xs text-slate-500">Next scheduled: In 30 days</p>
                     </div>
                 </div>
             </div>

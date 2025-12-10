@@ -25,11 +25,15 @@ export interface Machine {
   imageUrl: string;
   // Configuration & Specs
   modelNumber?: string;
+  serialNumber?: string;
+  firmwareVersion?: string;
+  networkIp?: string;
   installDate?: string;
   maxRpm?: number;
   powerRating?: number; // kW
   maintenanceInterval?: number; // hours
   operatingHours?: number;
+  lastCalibration?: string;
 }
 
 export interface Alert {

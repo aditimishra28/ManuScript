@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Activity, 
   AlertOctagon, 
@@ -10,183 +10,39 @@ import {
   Menu,
   Factory
 } from 'lucide-react';
-import { Machine, MachineStatus, Alert, SensorReading } from './types';
+import { Machine, MachineStatus, Alert } from './types';
 import MachineModel from './components/MachineModel';
-
-// -- Mock Data Generators --
-
-const generateInitialMachines = (): Machine[] => {
-  return [
-    {
-      id: 'm1',
-      name: 'CNC Milling Station A',
-      type: 'CNC Mill',
-      location: 'Sector 4',
-      status: MachineStatus.NORMAL,
-      lastMaintenance: '2023-10-15',
-      imageUrl: 'https://picsum.photos/800/600?random=1',
-      history: [],
-      // Config
-      modelNumber: 'CNC-X5000-PRO',
-      installDate: '2021-03-12',
-      maxRpm: 15000,
-      powerRating: 25,
-      maintenanceInterval: 1000,
-      operatingHours: 8450
-    },
-    {
-      id: 'm2',
-      name: 'Hydraulic Press 500T',
-      type: 'Press',
-      location: 'Sector 2',
-      status: MachineStatus.WARNING, // Start with a warning for demo
-      lastMaintenance: '2023-09-20',
-      imageUrl: 'https://picsum.photos/800/600?random=2',
-      history: [],
-      // Config
-      modelNumber: 'HYD-P500-T',
-      installDate: '2020-08-05',
-      maxRpm: 1500,
-      powerRating: 55,
-      maintenanceInterval: 500,
-      operatingHours: 12400
-    },
-    {
-      id: 'm3',
-      name: 'Robotic Arm Assembly',
-      type: 'Robotics',
-      location: 'Sector 1',
-      status: MachineStatus.NORMAL,
-      lastMaintenance: '2023-11-01',
-      imageUrl: 'https://picsum.photos/800/600?random=3',
-      history: [],
-      // Config
-      modelNumber: 'ROBO-KUKA-V2',
-      installDate: '2022-01-15',
-      maxRpm: 0,
-      powerRating: 12,
-      maintenanceInterval: 2000,
-      operatingHours: 4200
-    },
-    {
-      id: 'm4',
-      name: 'Conveyor Motor System',
-      type: 'Conveyor',
-      location: 'Logistics',
-      status: MachineStatus.NORMAL,
-      lastMaintenance: '2023-08-10',
-      imageUrl: 'https://picsum.photos/800/600?random=4',
-      history: [],
-       // Config
-      modelNumber: 'CONV-M200-S',
-      installDate: '2019-11-22',
-      maxRpm: 3000,
-      powerRating: 15,
-      maintenanceInterval: 750,
-      operatingHours: 18900
-    }
-  ];
-};
-
-const generateReading = (prev: SensorReading | null, status: MachineStatus): SensorReading => {
-  const now = Date.now();
-  
-  // Base values vary by status to simulate faults
-  let baseVib = status === MachineStatus.NORMAL ? 2.5 : status === MachineStatus.WARNING ? 5.5 : 8.5;
-  let baseTemp = status === MachineStatus.NORMAL ? 65 : status === MachineStatus.WARNING ? 78 : 95;
-  let baseNoise = status === MachineStatus.NORMAL ? 70 : 92;
-
-  // Add random fluctuation (noise)
-  const vibration = Math.max(0, baseVib + (Math.random() - 0.5) * 2);
-  const temperature = Math.max(20, baseTemp + (Math.random() - 0.5) * 5);
-  const noise = Math.max(40, baseNoise + (Math.random() - 0.5) * 10);
-  const rpm = 1200 + (Math.random() - 0.5) * 50;
-  const powerUsage = 45 + (Math.random() - 0.5) * 2;
-
-  return {
-    timestamp: now,
-    vibration,
-    temperature,
-    noise,
-    rpm,
-    powerUsage
-  };
-};
-
-const MAX_HISTORY = 30;
-
-// -- Main Component --
+import { pipeline } from './services/pipeline';
 
 const App = () => {
-  const [machines, setMachines] = useState<Machine[]>(generateInitialMachines());
+  const [machines, setMachines] = useState<Machine[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [isSidebarOpen, setSidebarOpen] = useState(true);
 
-  // Simulation Loop
+  // Initialize Pipeline Subscription
   useEffect(() => {
-    const interval = setInterval(() => {
-      setMachines(prevMachines => {
-        return prevMachines.map(machine => {
-          // 1. Generate new reading
-          const lastReading = machine.history.length > 0 ? machine.history[machine.history.length - 1] : null;
-          const newReading = generateReading(lastReading, machine.status);
-          
-          // 2. Update History
-          const newHistory = [...machine.history, newReading].slice(-MAX_HISTORY);
+    // Start the backend pipeline
+    pipeline.start();
 
-          // 3. Simple Threshold Logic for Status Transition (Simulation)
-          // In a real app, this might be more complex or driven by the backend
-          let newStatus = machine.status;
-          
-          // Randomly trigger issues for demo purposes on specific machines if they are normal
-          if (machine.status === MachineStatus.NORMAL && Math.random() > 0.98) {
-             // 2% chance to degrade to warning per tick
-             newStatus = MachineStatus.WARNING;
-          }
-
-          // If in Warning, small chance to go critical or back to normal (simulated fluctuation)
-          if (machine.status === MachineStatus.WARNING) {
-             if (newReading.temperature > 85 || newReading.vibration > 7) {
-                 newStatus = MachineStatus.CRITICAL;
-             } else if (Math.random() > 0.95) {
-                 newStatus = MachineStatus.NORMAL; // Self-corrected?
-             }
-          }
-
-          return { ...machine, history: newHistory, status: newStatus };
+    // Subscribe to real-time updates
+    const unsubscribe = pipeline.subscribe((updatedMachines, updatedAlerts) => {
+        setMachines(updatedMachines);
+        setAlerts(updatedAlerts);
+        
+        // Update selected machine state live if modal is open
+        setSelectedMachine(currentSelection => {
+            if (!currentSelection) return null;
+            return updatedMachines.find(m => m.id === currentSelection.id) || currentSelection;
         });
-      });
-    }, 2000); // 2 seconds tick
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Alert Generation based on machine state changes
-  useEffect(() => {
-    machines.forEach(m => {
-        const lastReading = m.history[m.history.length - 1];
-        if (!lastReading) return;
-
-        if (m.status === MachineStatus.CRITICAL) {
-            // Check if alert already exists recently
-            const existing = alerts.find(a => a.machineId === m.id && Date.now() - a.timestamp < 10000);
-            if (!existing) {
-                const newAlert: Alert = {
-                    id: Math.random().toString(36).substr(2, 9),
-                    machineId: m.id,
-                    machineName: m.name,
-                    timestamp: Date.now(),
-                    severity: 'high',
-                    message: `Critical anomaly detected: ${lastReading.vibration > 6 ? 'High Vibration' : 'Overheating'}`,
-                    value: lastReading.vibration > 6 ? lastReading.vibration : lastReading.temperature
-                };
-                setAlerts(prev => [newAlert, ...prev].slice(0, 50)); // Keep last 50
-            }
-        }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [machines]); // Check whenever machines update
+
+    // Cleanup on unmount
+    return () => {
+        unsubscribe();
+        pipeline.stop();
+    };
+  }, []);
 
   const getStatusColor = (status: MachineStatus) => {
     switch (status) {
@@ -304,7 +160,7 @@ const App = () => {
             <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
                 Floor Overview 
                 <span className="text-xs font-normal text-slate-500 bg-slate-900 px-2 py-1 rounded border border-slate-800">
-                    Updating Live
+                    Live Pipeline Active
                 </span>
             </h2>
 
