@@ -114,7 +114,17 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
         } catch (err: any) {
           if (!isMounted) return;
           console.error("Error accessing camera:", err);
-          setCameraError("Camera access denied or unavailable.");
+          
+          let errorMessage = "Camera access unavailable.";
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+              errorMessage = "Permission denied. Please enable camera access in browser settings.";
+          } else if (err.name === 'NotFoundError') {
+              errorMessage = "No camera device found.";
+          } else if (err.name === 'NotReadableError') {
+              errorMessage = "Camera is currently in use by another application.";
+          }
+          
+          setCameraError(errorMessage);
           setIsCameraLoading(false);
         }
       };
@@ -240,9 +250,15 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         </div>
                     )}
                     {cameraError ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-6 text-center">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-6 text-center z-20">
                             <AlertTriangle className="w-8 h-8 text-rose-500 mb-2" />
-                            <p className="text-xs text-slate-400">{cameraError}</p>
+                            <p className="text-xs text-slate-400 mb-4">{cameraError}</p>
+                            <button 
+                                onClick={() => setIsARInspectionMode(false)}
+                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-xs text-white transition-colors"
+                            >
+                                Return to Digital Twin
+                            </button>
                         </div>
                     ) : (
                         <video ref={videoRef} autoPlay playsInline muted className="w-full h-64 object-cover" />
@@ -403,6 +419,13 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                                         </div>
                                     </div>
                                 </div>
+                                <button 
+                                    onClick={() => handleGenerateImage('failure')}
+                                    className="w-full mt-2 py-1.5 bg-rose-900/30 hover:bg-rose-900/50 border border-rose-700/50 rounded text-xs text-rose-300 flex items-center justify-center gap-2 transition-colors"
+                                >
+                                    <ImageIcon className="w-3 h-3" />
+                                    Visualize Failure Scenario
+                                </button>
                             </div>
                         )}
                         

@@ -40,6 +40,9 @@ const App = () => {
   const [activeView, setActiveView] = useState<ViewState>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   
+  // UI State
+  const [isNotificationsOpen, setNotificationsOpen] = useState(false);
+  
   // Modal State
   const [showWizard, setShowWizard] = useState(false);
 
@@ -276,7 +279,7 @@ const App = () => {
       <main className="flex-1 flex flex-col overflow-hidden relative">
         
         {/* Top Header */}
-        <header className="h-16 bg-slate-900/50 backdrop-blur-md border-b border-slate-800 flex items-center justify-between px-6 z-10">
+        <header className="h-16 bg-slate-900/50 backdrop-blur-md border-b border-slate-800 flex items-center justify-between px-6 z-10 relative">
            <div className="flex items-center gap-4">
                <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400">
                   <Menu className="w-5 h-5" />
@@ -295,14 +298,58 @@ const App = () => {
                     className="bg-slate-950 border border-slate-800 rounded-full pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-indigo-500 w-64 transition-all"
                  />
               </div>
+              
+              {/* Notifications */}
               <div className="relative">
-                 <Bell className="w-5 h-5 text-slate-400 hover:text-white cursor-pointer" />
-                 {alerts.length > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 rounded-full text-[10px] flex items-center justify-center text-white font-bold animate-pulse">
-                        {alerts.length}
-                    </span>
+                 <button 
+                    onClick={() => setNotificationsOpen(!isNotificationsOpen)}
+                    className="relative p-1 rounded-full hover:bg-slate-800 transition-colors focus:outline-none"
+                 >
+                    <Bell className="w-5 h-5 text-slate-400 hover:text-white" />
+                    {alerts.length > 0 && (
+                        <span className="absolute top-0 right-0 w-4 h-4 bg-rose-500 rounded-full text-[10px] flex items-center justify-center text-white font-bold animate-pulse">
+                            {alerts.length}
+                        </span>
+                    )}
+                 </button>
+
+                 {/* Notifications Dropdown */}
+                 {isNotificationsOpen && (
+                      <>
+                        <div className="fixed inset-0 z-30" onClick={() => setNotificationsOpen(false)}></div>
+                        <div className="absolute top-10 right-0 w-80 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                            <div className="p-3 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+                                <h3 className="font-semibold text-white text-sm">Notifications</h3>
+                                <span className="text-xs text-slate-500">{alerts.length} Total</span>
+                            </div>
+                            <div className="max-h-[300px] overflow-y-auto">
+                                {alerts.length === 0 ? (
+                                    <div className="p-6 text-center text-slate-500 text-sm">No new alerts</div>
+                                ) : (
+                                    alerts.slice(0, 5).map(alert => (
+                                        <div key={alert.id} className="p-3 border-b border-slate-800/50 hover:bg-slate-800 transition-colors cursor-pointer" onClick={() => setActiveView('alerts')}>
+                                            <div className="flex justify-between items-start mb-1">
+                                                <span className="font-medium text-slate-200 text-xs">{alert.machineName}</span>
+                                                <span className="text-[10px] text-slate-500">{new Date(alert.timestamp).toLocaleTimeString()}</span>
+                                            </div>
+                                            <p className="text-xs text-slate-400 line-clamp-2">{alert.message}</p>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                            <div className="p-2 bg-slate-950 border-t border-slate-800 text-center">
+                                <button 
+                                    onClick={() => { setActiveView('alerts'); setNotificationsOpen(false); }}
+                                    className="text-xs text-indigo-400 hover:text-white font-medium w-full py-1"
+                                >
+                                    View All Alerts
+                                </button>
+                            </div>
+                        </div>
+                      </>
                  )}
               </div>
+
               <button 
                 onClick={() => setShowWizard(true)}
                 className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
