@@ -15,7 +15,9 @@ import {
   User,
   Plus,
   LogOut,
-  Info
+  Info,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { Machine, MachineStatus, Alert } from './types';
 import MachineModel from './components/MachineModel';
@@ -35,6 +37,8 @@ const App = () => {
   // App State
   const [machines, setMachines] = useState<Machine[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [isLiveConnection, setIsLiveConnection] = useState(false);
+  
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<ViewState>('dashboard');
@@ -63,10 +67,11 @@ const App = () => {
         // Start the backend pipeline only after login
         pipeline.start();
 
-        // Subscribe to real-time updates
-        const unsubscribe = pipeline.subscribe((updatedMachines, updatedAlerts) => {
+        // Subscribe to real-time updates AND connection status
+        const unsubscribe = pipeline.subscribe((updatedMachines, updatedAlerts, isLive) => {
             setMachines(updatedMachines);
             setAlerts(updatedAlerts);
+            setIsLiveConnection(isLive);
             
             // Update selected machine state live if modal is open
             setSelectedMachine(currentSelection => {
@@ -367,11 +372,22 @@ const App = () => {
                 <div className="space-y-6">
                     {renderStatsRow()}
                     
-                    <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                        Floor Overview 
-                        <span className="text-xs font-normal text-indigo-300 bg-indigo-900/30 px-2 py-1 rounded border border-indigo-500/30 flex items-center gap-1">
-                            <Info className="w-3 h-3" /> Client-Side Simulation Active
-                        </span>
+                    <h2 className="text-xl font-semibold text-white flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            Floor Overview 
+                            {!isLiveConnection && (
+                                <span className="text-xs font-bold text-amber-300 bg-amber-900/30 px-3 py-1 rounded border border-amber-500/50 flex items-center gap-2 animate-pulse">
+                                    <WifiOff className="w-3 h-3" /> 
+                                    DEMO SIMULATION MODE
+                                </span>
+                            )}
+                            {isLiveConnection && (
+                                <span className="text-xs font-bold text-emerald-300 bg-emerald-900/30 px-3 py-1 rounded border border-emerald-500/50 flex items-center gap-2">
+                                    <Wifi className="w-3 h-3" /> 
+                                    LIVE TELEMETRY
+                                </span>
+                            )}
+                        </div>
                     </h2>
                     
                     {renderMachineGrid(filteredMachines)}

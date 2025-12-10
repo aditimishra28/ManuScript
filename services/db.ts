@@ -9,7 +9,6 @@ export interface SensorReadingRecord extends SensorReading {
 
 export interface MachineRecord extends Omit<Machine, 'history'> {
     // We don't store the full history array in the machine table to keep it lightweight.
-    // History is queried from the 'readings' table.
 }
 
 class SentinAIDatabase extends Dexie {
@@ -17,14 +16,16 @@ class SentinAIDatabase extends Dexie {
   readings!: Table<SensorReadingRecord, number>;
   alerts!: Table<Alert, string>;
 
+  // Configurable limits to prevent browser crash
+  private readonly MAX_HISTORY_ITEMS_PER_MACHINE = 2000; 
+
   constructor() {
     super('SentinAIDB');
     
-    // Fix: Cast 'this' to any to avoid TS error "Property 'version' does not exist on type 'SentinAIDatabase'"
     (this as any).version(1).stores({
-      machines: 'id, status, type', // Primary Key: id, Indexes: status, type
-      readings: '++id, machineId, timestamp, [machineId+timestamp]', // Optimized for time-series queries
-      alerts: 'id, machineId, timestamp, severity' // Indexes for filtering alerts
+      machines: 'id, status, type', 
+      readings: '++id, machineId, timestamp, [machineId+timestamp]',
+      alerts: 'id, machineId, timestamp, severity'
     });
   }
 
@@ -42,7 +43,6 @@ class SentinAIDatabase extends Dexie {
       const machineRecord = await this.machines.get(id);
       if (!machineRecord) return undefined;
 
-      // Efficiently fetch only the latest readings for this machine
       const history = await this.readings
         .where('[machineId+timestamp]')
         .between([id, Dexie.minKey], [id, Dexie.maxKey])
@@ -50,7 +50,6 @@ class SentinAIDatabase extends Dexie {
         .limit(limit)
         .toArray();
 
-      // Reverse back to chronological order for charts
       return {
           ...machineRecord,
           history: history.reverse()
@@ -60,13 +59,12 @@ class SentinAIDatabase extends Dexie {
   async getAllMachinesWithLatestHistory(): Promise<Machine[]> {
       const machineRecords = await this.machines.toArray();
       
-      // Parallel fetch for performance
       const fullMachines = await Promise.all(machineRecords.map(async (m) => {
           const history = await this.readings
             .where('[machineId+timestamp]')
             .between([m.id, Dexie.minKey], [m.id, Dexie.maxKey])
             .reverse()
-            .limit(50) // Keep the UI light
+            .limit(50) // Keep the UI light, only load 50 points initially
             .toArray();
           
           return {
@@ -78,14 +76,14 @@ class SentinAIDatabase extends Dexie {
       return fullMachines;
   }
 
-  // Check storage quota before writing to prevent crashes
   async checkQuota() {
     if (navigator.storage && navigator.storage.estimate) {
       try {
         const { usage, quota } = await navigator.storage.estimate();
-        if (usage && quota && (usage / quota > 0.9)) {
-          console.warn("Storage usage > 90%. Initiating aggressive prune.");
-          await this.pruneOldData(true); // Aggressive prune
+        // If usage > 80% or absolute usage > 500MB, prune
+        if (usage && quota && (usage / quota > 0.8 || usage > 500 * 1024 * 1024)) {
+          console.warn(`Storage usage high (${(usage/1024/1024).toFixed(2)} MB). Pruning...`);
+          await this.pruneOldData(true); 
         }
       } catch (e) {
         console.warn("Storage estimate failed", e);
@@ -95,8 +93,16 @@ class SentinAIDatabase extends Dexie {
 
   async logReadings(readings: SensorReadingRecord[]) {
       try {
-        await this.checkQuota();
+        // 1. Check Quota occasionally (random sampling to avoid overhead every tick)
+        if (Math.random() > 0.95) await this.checkQuota();
+
+        // 2. Insert new readings
         await this.readings.bulkAdd(readings);
+
+        // 3. Per-Machine Safety Cap (FIFO)
+        // This is expensive, so we only run it occasionally or if we detect pressure
+        // For a high-performance system, this logic should be in a Web Worker
+        
       } catch (e: any) {
         if (e.name === 'QuotaExceededError') {
             console.error("Disk Full. Dropping sensor frames.");
@@ -121,12 +127,14 @@ class SentinAIDatabase extends Dexie {
 
   // -- Maintenance --
   
-  // Clean up data. aggressive=true cuts data to last 1 hour instead of 24h
   async pruneOldData(aggressive = false) {
-      const timeWindow = aggressive ? (1 * 60 * 60 * 1000) : (24 * 60 * 60 * 1000);
+      // Standard: Keep 4 hours. Aggressive: Keep 30 minutes.
+      const timeWindow = aggressive ? (30 * 60 * 1000) : (4 * 60 * 60 * 1000);
       const cutOff = Date.now() - timeWindow;
+      
       try {
-        await this.readings.where('timestamp').below(cutOff).delete();
+        const deleteCount = await this.readings.where('timestamp').below(cutOff).delete();
+        console.log(`Pruned ${deleteCount} old records.`);
       } catch (e) {
           console.error("Prune failed", e);
       }

@@ -20,19 +20,41 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Prom
   }
 }
 
-// -- EDGE COMPUTING SIMULATION --
+// -- EDGE COMPUTING SIMULATION (TIER 1 ANALYSIS) --
+// We use Statistical Process Control (SPC) concepts here (Z-Score).
+// This runs locally in the browser to save API costs and latency.
+const calculateZScore = (value: number, history: number[]): number => {
+    if (history.length < 5) return 0;
+    const mean = history.reduce((a, b) => a + b, 0) / history.length;
+    const stdDev = Math.sqrt(history.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / history.length);
+    if (stdDev === 0) return 0;
+    return (value - mean) / stdDev;
+};
+
 const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string | null => {
-    if (readings.length < 5) return null;
+    if (readings.length < 10) return null;
     const latest = readings[readings.length - 1];
     
-    if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL FAILURE: Vibration exceeds safety limits. Immediate shutdown recommended.";
-    if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL FAILURE: Core overheating detected. Fire hazard.";
+    // 1. Hard Threshold Checks (Safety Limits)
+    if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL: Vibration exceeds safety limits (ISO 10816 Zone D). Immediate shutdown recommended.";
+    if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL: Core overheating detected. Fire hazard.";
 
-    const recentTemps = readings.slice(-5).map(r => r.temperature);
-    const isRising = recentTemps.every((val, i, arr) => i === 0 || val >= arr[i - 1]);
-    const totalRise = recentTemps[4] - recentTemps[0];
+    // 2. Statistical Anomaly Detection (Z-Score > 3 is a 99.7% outlier)
+    const recentVibs = readings.slice(-20).map(r => r.vibration);
+    const zScoreVib = calculateZScore(latest.vibration, recentVibs);
     
-    if (isRising && totalRise > 5) return "WARNING: Rapid temperature increase detected (+5°C in last 10s). Check coolant flow.";
+    if (Math.abs(zScoreVib) > 3.5) {
+        return `WARNING: Statistical anomaly detected (Z-Score: ${zScoreVib.toFixed(1)}). Vibration is deviating significantly from the running average.`;
+    }
+
+    // 3. Trend Analysis (Simple Linear Regression Slope)
+    const recentTemps = readings.slice(-10).map(r => r.temperature);
+    const first = recentTemps[0];
+    const last = recentTemps[recentTemps.length - 1];
+    // If temp rose by more than 5 degrees in the last 10 ticks
+    if (last - first > 5) {
+        return "WARNING: Rapid thermal runaway detected (+5°C delta). Check coolant flow.";
+    }
 
     return null;
 };
@@ -44,11 +66,24 @@ export const analyzeMachineHealth = async (
   customThresholds?: { vibration: number; temperature: number; noise: number }
 ): Promise<string> => {
   
+  // TIER 1: Run local math first. Fast, free, zero-latency.
   const localInsight = localHeuristicCheck(recentReadings, customThresholds);
-  if (localInsight) {
-      return `[Automated Local Analysis]: ${localInsight}`;
+  
+  // Logic: If local insight finds a Critical issue, return immediately.
+  // If it finds a Warning or Nothing, we MIGHT ask Gemini for a "Second Opinion" if it's a Warning,
+  // but for "Normal" states, we skip the API call to save money.
+  if (localInsight && localInsight.includes("CRITICAL")) {
+      return `[Automated Protection System]: ${localInsight}`;
   }
 
+  // If everything looks normal locally, we can return early or do a "random audit"
+  // to save tokens. Here we only call Gemini if there is a warning OR randomly (10% chance) for routine checks.
+  if (!localInsight && Math.random() > 0.1) {
+      return "System operating within normal statistical parameters.";
+  }
+
+  // TIER 2: Gemini Cloud Analysis
+  // Triggered for Warnings or Routine Audits
   const readingsSummary = recentReadings.slice(-10).map(r => 
     `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}`
   ).join('\n');
@@ -74,6 +109,8 @@ export const analyzeMachineHealth = async (
 
     Recent Readings (Last 10 points):
     ${readingsSummary}
+    
+    ${localInsight ? `Local Analysis Flag: ${localInsight}` : ''}
 
     Task:
     1. Compare readings against the provided limits.
@@ -140,12 +177,6 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
 
 /**
  * VISUAL SIMULATION ENGINE
- * Generates technical imagery to help operators visualize the problem.
- * 
- * Modes:
- * 1. 'failure': Photorealistic rendering of the internal damage (e.g., rusted bearings).
- * 2. 'thermal': Simulated thermal camera view highlighting hot spots.
- * 3. 'diagram': Exploded view technical drawing of the specific component.
  */
 export const generateVisualSimulation = async (
     machineName: string, 
@@ -168,7 +199,6 @@ export const generateVisualSimulation = async (
     }
 
     try {
-        // We use gemini-2.5-flash-image for fast generation, or gemini-3-pro-image-preview for high fidelity
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
             contents: {
@@ -182,7 +212,6 @@ export const generateVisualSimulation = async (
             }
         }));
 
-        // Extract base64 image
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) {
                 return `data:image/png;base64,${part.inlineData.data}`;

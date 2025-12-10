@@ -27,10 +27,14 @@ type InitMessage = {
 
 type WSMessage = TelemetryMessage | AlertMessage | InitMessage;
 
-type PipelineListener = (machines: Machine[], alerts: Alert[]) => void;
+// Updated Listener Signature to include Connection Status
+type PipelineListener = (
+    machines: Machine[], 
+    alerts: Alert[], 
+    isLive: boolean
+) => void;
 
-// -- Fallback Simulation Helpers (Kept for Dev Mode/Connection Failure) --
-// This ensures the app is usable even if the backend isn't running yet.
+// -- Fallback Simulation Helpers --
 const generateFallbackReading = (timestamp: number, status: MachineStatus): SensorReading => {
   const t = timestamp / 1000;
   const baseVib = status === MachineStatus.NORMAL ? 2.5 : status === MachineStatus.WARNING ? 5.5 : 8.5;
@@ -93,17 +97,16 @@ class ManufacturingPipeline {
 
   public subscribe(listener: PipelineListener) {
     this.listeners.push(listener);
-    listener(this.machines, this.alerts);
+    // Send current state immediately
+    listener(this.machines, this.alerts, this.isConnected);
     return () => {
       this.listeners = this.listeners.filter(l => l !== listener);
     };
   }
 
   public registerMachine(machineData: Partial<Machine>) {
-    // In a real app, this sends a POST request to the backend API
     console.log("Registering machine via API...", machineData);
     
-    // Optimistic UI update for demo purposes
     const newMachine: Machine = {
       id: `m${Date.now()}`,
       name: machineData.name || 'New Machine',
@@ -119,7 +122,6 @@ class ManufacturingPipeline {
     this.machines.push(newMachine);
     this.notify();
 
-    // If connected, send to backend
     if (this.isConnected && this.ws) {
         this.ws.send(JSON.stringify({ type: 'REGISTER_MACHINE', payload: newMachine }));
     }
@@ -128,21 +130,19 @@ class ManufacturingPipeline {
   private notify() {
     const safeMachines = [...this.machines];
     const safeAlerts = [...this.alerts];
-    this.listeners.forEach(l => l(safeMachines, safeAlerts));
+    this.listeners.forEach(l => l(safeMachines, safeAlerts, this.isConnected));
   }
 
   // -- WebSocket Logic --
 
   private connectWebSocket() {
     if (this.ws) return;
-
-    // console.log(`Connecting to Signal Server: ${this.wsUrl}`);
     
     try {
         this.ws = new WebSocket(this.wsUrl);
     } catch (error) {
-        // Immediate failure (e.g. invalid syntax)
-        console.warn("WebSocket initialization failed, defaulting to simulation.");
+        // Immediate failure (e.g. invalid syntax or offline)
+        this.isConnected = false;
         this.startFallbackSimulation();
         return;
     }
@@ -150,7 +150,8 @@ class ManufacturingPipeline {
     this.ws.onopen = () => {
       console.log("✅ WebSocket Connected: Real-time stream active.");
       this.isConnected = true;
-      this.stopFallbackSimulation(); // Stop fake data if real data is flowing
+      this.stopFallbackSimulation(); // CRITICAL: Stop fake data if real data is flowing
+      this.notify();
     };
 
     this.ws.onmessage = (event) => {
@@ -163,27 +164,24 @@ class ManufacturingPipeline {
     };
 
     this.ws.onclose = () => {
-      // Only warn if we were previously connected, otherwise it's just initial fail
       if (this.isConnected) {
         console.warn("⚠️ WebSocket Disconnected. Switching to Offline Mode.");
       }
       this.isConnected = false;
       this.ws = null;
-      this.startFallbackSimulation(); // Start fake data so UI doesn't freeze
+      this.startFallbackSimulation(); 
+      this.notify();
       this.scheduleReconnect();
     };
 
     this.ws.onerror = (event) => {
-      // Squelch the annoying "WebSocket Error [object Object]" log in console.
-      // We handle the fallback in onclose anyway.
-      // console.debug("WebSocket connection unavailable (using offline simulation).");
+       // Handled by onclose
     };
   }
 
   private scheduleReconnect() {
     if (this.reconnectInterval) return;
     this.reconnectInterval = setInterval(() => {
-      // console.log("Attempting WebSocket Reconnect...");
       this.connectWebSocket();
     }, 5000);
   }
@@ -220,6 +218,8 @@ class ManufacturingPipeline {
     };
 
     // Async: Persist to local IndexedDB for offline cache
+    // Note: We might want to tag these as "simulated" in the DB if isConnected is false,
+    // but for now, we just store raw data.
     db.logReadings([{ ...reading, machineId: id }]).catch(() => {});
     if (machine.status !== status) {
         db.updateMachineStatus(id, status);
@@ -233,10 +233,8 @@ class ManufacturingPipeline {
     db.logAlert(alert);
     this.notify();
 
-    // Trigger AI analysis for high severity alerts if not present
     if (alert.severity === 'high' && !alert.message.includes('[AI')) {
        generateMaintenancePlan(alert.message, alert.machineName).then(plan => {
-           // In a real app, we would send this back to the backend
            console.log("AI Analysis Generated:", plan);
        });
     }
@@ -246,7 +244,7 @@ class ManufacturingPipeline {
 
   private startFallbackSimulation() {
     if (this.simulationInterval) return;
-    console.log(">> Starting Client-Side Simulation (Offline Fallback)");
+    // console.log(">> Starting Client-Side Simulation (Offline Fallback)");
     
     // Ensure we have at least dummy machines if DB was empty
     if (this.machines.length === 0) {
