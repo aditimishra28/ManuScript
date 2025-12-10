@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Machine, MachineStatus, SensorReading } from '../types';
 import { LiveCharts } from './LiveCharts';
 import { 
@@ -9,6 +9,7 @@ import {
   Activity, 
   Volume2, 
   Video,
+  VideoOff,
   Settings,
   History,
   MonitorPlay,
@@ -18,7 +19,9 @@ import {
   Gauge,
   Wifi,
   Cpu,
-  Edit
+  Edit,
+  Save,
+  X
 } from 'lucide-react';
 import { analyzeMachineHealth, generateMaintenancePlan } from '../services/geminiService';
 
@@ -34,6 +37,65 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [structuredPlan, setStructuredPlan] = useState<any>(null);
+
+  // Configuration Edit State
+  const [isEditing, setIsEditing] = useState(false);
+  const [configForm, setConfigForm] = useState({
+    modelNumber: machine.modelNumber || '',
+    serialNumber: machine.serialNumber || '',
+    powerRating: machine.powerRating?.toString() || '',
+    maxRpm: machine.maxRpm?.toString() || '',
+    firmwareVersion: machine.firmwareVersion || '',
+    networkIp: machine.networkIp || ''
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Camera State
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Manage Camera Stream
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+
+    if (isCameraActive) {
+      const startCamera = async () => {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+          }
+        } catch (err) {
+          console.error("Error accessing camera:", err);
+          setIsCameraActive(false);
+          alert("Could not access camera. Please check permissions.");
+        }
+      };
+      startCamera();
+    }
+
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [isCameraActive]);
+
+
+  // Reset form when machine changes or editing stops
+  useEffect(() => {
+    if (!isEditing) {
+        setConfigForm({
+            modelNumber: machine.modelNumber || '',
+            serialNumber: machine.serialNumber || '',
+            powerRating: machine.powerRating?.toString() || '',
+            maxRpm: machine.maxRpm?.toString() || '',
+            firmwareVersion: machine.firmwareVersion || '',
+            networkIp: machine.networkIp || ''
+        });
+        setErrors({});
+    }
+  }, [machine, isEditing]);
 
   const handleRunDiagnostics = async () => {
     setIsAnalyzing(true);
@@ -55,6 +117,49 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
     }, 500);
   };
 
+  const validateAndSaveConfig = () => {
+    const newErrors: Record<string, string> = {};
+    
+    // 1. Model & Serial Checks
+    if (!configForm.modelNumber.trim()) newErrors.modelNumber = "Model Number is required";
+    if (!configForm.serialNumber.trim()) newErrors.serialNumber = "Serial Number is required";
+
+    // 2. Numeric Checks
+    const power = parseFloat(configForm.powerRating);
+    if (isNaN(power) || power <= 0) newErrors.powerRating = "Must be a positive number";
+
+    const rpm = parseFloat(configForm.maxRpm);
+    if (isNaN(rpm) || rpm <= 0) newErrors.maxRpm = "Must be a positive number";
+    if (rpm > 50000) newErrors.maxRpm = "Exceeds safety limit (50k)";
+
+    // 3. IP Address Check
+    const ipRegex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    if (!ipRegex.test(configForm.networkIp)) {
+        newErrors.networkIp = "Invalid IP Address format";
+    }
+
+    setErrors(newErrors);
+
+    if (Object.keys(newErrors).length === 0) {
+        // Validation Passed
+        setIsEditing(false);
+        // In a real app, we would dispatch an update to the backend here
+        // onUpdate(machine.id, configForm);
+    }
+  };
+
+  const handleInputChange = (field: string, value: string) => {
+      setConfigForm(prev => ({...prev, [field]: value}));
+      // Clear error on change
+      if (errors[field]) {
+          setErrors(prev => {
+              const next = {...prev};
+              delete next[field];
+              return next;
+          });
+      }
+  };
+
   const latestReading = machine.history[machine.history.length - 1];
 
   const renderLiveMonitor = () => (
@@ -67,17 +172,38 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
               <div className="absolute top-2 left-2 bg-red-600 text-white text-[10px] px-2 py-0.5 rounded animate-pulse flex items-center gap-1 z-10">
                 <div className="w-2 h-2 bg-white rounded-full"></div> LIVE
               </div>
-              <img 
-                src={machine.imageUrl} 
-                alt="Machine Feed" 
-                className="w-full h-64 object-cover opacity-80"
-              />
-              <div className="absolute inset-0 border-[4px] border-slate-800/0 hover:border-blue-500/30 transition-all pointer-events-none flex items-center justify-center">
-                 <Video className="text-slate-600/20 w-16 h-16" />
-              </div>
+              
+              <button 
+                onClick={() => setIsCameraActive(!isCameraActive)}
+                className="absolute top-2 right-2 z-20 bg-slate-900/80 hover:bg-slate-700 text-white text-[10px] px-2 py-1 rounded border border-slate-600 transition-colors flex items-center gap-1 backdrop-blur-sm"
+              >
+                {isCameraActive ? <VideoOff className="w-3 h-3" /> : <Video className="w-3 h-3" />}
+                {isCameraActive ? "Stop Cam" : "Connect Cam"}
+              </button>
+
+              {isCameraActive ? (
+                <video 
+                    ref={videoRef}
+                    autoPlay 
+                    playsInline 
+                    muted 
+                    className="w-full h-64 object-cover"
+                />
+              ) : (
+                <>
+                    <img 
+                        src={machine.imageUrl} 
+                        alt="Machine Feed" 
+                        className="w-full h-64 object-cover opacity-80"
+                    />
+                    <div className="absolute inset-0 border-[4px] border-slate-800/0 hover:border-blue-500/30 transition-all pointer-events-none flex items-center justify-center">
+                        <Video className="text-slate-600/20 w-16 h-16" />
+                    </div>
+                </>
+              )}
               
               {/* Augmented Reality Overlay Simulation */}
-              <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-md p-3 rounded border border-slate-600 text-xs text-slate-300">
+              <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-md p-3 rounded border border-slate-600 text-xs text-slate-300 z-10">
                 <div className="flex justify-between">
                     <span>Alignment:</span>
                     <span className="text-emerald-400">99.8%</span>
@@ -232,31 +358,105 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                     <Settings className="w-5 h-5 text-indigo-400" />
                     Technical Specifications
                 </h3>
-                <button className="text-xs flex items-center gap-1 text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded border border-slate-700">
-                    <Edit className="w-3 h-3" /> Edit Mode
-                </button>
+                
+                {isEditing ? (
+                    <div className="flex items-center gap-2">
+                         <button 
+                            onClick={validateAndSaveConfig}
+                            className="flex items-center gap-1 text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded transition-colors"
+                         >
+                            <Save className="w-3 h-3" /> Save
+                         </button>
+                         <button 
+                            onClick={() => setIsEditing(false)}
+                            className="flex items-center gap-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1.5 rounded transition-colors"
+                         >
+                            <X className="w-3 h-3" /> Cancel
+                         </button>
+                    </div>
+                ) : (
+                    <button 
+                        onClick={() => setIsEditing(true)}
+                        className="text-xs flex items-center gap-1 text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded border border-slate-700 transition-colors"
+                    >
+                        <Edit className="w-3 h-3" /> Edit Mode
+                    </button>
+                )}
             </div>
             
             <div className="grid grid-cols-2 gap-4">
+                {/* Model Number */}
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Model Number</div>
-                    <div className="text-white font-mono">{machine.modelNumber || 'N/A'}</div>
+                    {isEditing ? (
+                        <>
+                            <input 
+                                value={configForm.modelNumber}
+                                onChange={(e) => handleInputChange('modelNumber', e.target.value)}
+                                className={`w-full bg-slate-900 border ${errors.modelNumber ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
+                            />
+                            {errors.modelNumber && <p className="text-rose-500 text-[10px] mt-1">{errors.modelNumber}</p>}
+                        </>
+                    ) : (
+                        <div className="text-white font-mono">{configForm.modelNumber || 'N/A'}</div>
+                    )}
                 </div>
+
+                {/* Serial Number */}
                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Serial Number</div>
-                    <div className="text-white font-mono text-sm">{machine.serialNumber || 'N/A'}</div>
+                    {isEditing ? (
+                        <>
+                            <input 
+                                value={configForm.serialNumber}
+                                onChange={(e) => handleInputChange('serialNumber', e.target.value)}
+                                className={`w-full bg-slate-900 border ${errors.serialNumber ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
+                            />
+                            {errors.serialNumber && <p className="text-rose-500 text-[10px] mt-1">{errors.serialNumber}</p>}
+                        </>
+                    ) : (
+                        <div className="text-white font-mono text-sm">{configForm.serialNumber || 'N/A'}</div>
+                    )}
                 </div>
+
+                {/* Power Rating */}
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <div className="text-slate-500 text-xs uppercase mb-1">Power Rating</div>
-                    <div className="text-white font-mono flex items-center gap-2">
-                        <Zap className="w-3 h-3 text-yellow-500" /> {machine.powerRating ? `${machine.powerRating} kW` : 'N/A'}
-                    </div>
+                    <div className="text-slate-500 text-xs uppercase mb-1">Power Rating (kW)</div>
+                    {isEditing ? (
+                        <>
+                            <input 
+                                type="number"
+                                value={configForm.powerRating}
+                                onChange={(e) => handleInputChange('powerRating', e.target.value)}
+                                className={`w-full bg-slate-900 border ${errors.powerRating ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
+                            />
+                            {errors.powerRating && <p className="text-rose-500 text-[10px] mt-1">{errors.powerRating}</p>}
+                        </>
+                    ) : (
+                        <div className="text-white font-mono flex items-center gap-2">
+                            <Zap className="w-3 h-3 text-yellow-500" /> {configForm.powerRating || 'N/A'} kW
+                        </div>
+                    )}
                 </div>
+
+                {/* Max RPM */}
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Max RPM</div>
-                    <div className="text-white font-mono flex items-center gap-2">
-                        <Gauge className="w-3 h-3 text-red-400" /> {machine.maxRpm || 'N/A'}
-                    </div>
+                    {isEditing ? (
+                        <>
+                            <input 
+                                type="number"
+                                value={configForm.maxRpm}
+                                onChange={(e) => handleInputChange('maxRpm', e.target.value)}
+                                className={`w-full bg-slate-900 border ${errors.maxRpm ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
+                            />
+                            {errors.maxRpm && <p className="text-rose-500 text-[10px] mt-1">{errors.maxRpm}</p>}
+                        </>
+                    ) : (
+                        <div className="text-white font-mono flex items-center gap-2">
+                            <Gauge className="w-3 h-3 text-red-400" /> {configForm.maxRpm || 'N/A'}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -268,13 +468,32 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                  <div className="space-y-3">
                     <div className="flex justify-between text-sm items-center py-1 border-b border-slate-700/50">
                         <span className="text-slate-500">Firmware Version</span>
-                        <span className="text-emerald-400 font-mono text-xs bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-500/20">{machine.firmwareVersion || 'v1.0.0'}</span>
+                        {isEditing ? (
+                            <input 
+                                value={configForm.firmwareVersion}
+                                onChange={(e) => handleInputChange('firmwareVersion', e.target.value)}
+                                className="w-32 bg-slate-900 border border-slate-600 rounded px-2 py-0.5 text-xs text-white text-right"
+                            />
+                        ) : (
+                            <span className="text-emerald-400 font-mono text-xs bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-500/20">{configForm.firmwareVersion || 'v1.0.0'}</span>
+                        )}
                     </div>
                     <div className="flex justify-between text-sm items-center py-1 border-b border-slate-700/50">
                         <span className="text-slate-500">Network IP (Local)</span>
-                        <span className="text-slate-300 font-mono text-xs flex items-center gap-1">
-                             <Wifi className="w-3 h-3 text-indigo-400" /> {machine.networkIp || '192.168.0.0'}
-                        </span>
+                        {isEditing ? (
+                             <div className="flex flex-col items-end">
+                                <input 
+                                    value={configForm.networkIp}
+                                    onChange={(e) => handleInputChange('networkIp', e.target.value)}
+                                    className={`w-32 bg-slate-900 border ${errors.networkIp ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-0.5 text-xs text-white text-right`}
+                                />
+                                {errors.networkIp && <span className="text-rose-500 text-[10px]">{errors.networkIp}</span>}
+                             </div>
+                        ) : (
+                            <span className="text-slate-300 font-mono text-xs flex items-center gap-1">
+                                <Wifi className="w-3 h-3 text-indigo-400" /> {configForm.networkIp || '192.168.0.0'}
+                            </span>
+                        )}
                     </div>
                     <div className="flex justify-between text-sm items-center py-1">
                         <span className="text-slate-500">Installation Date</span>
