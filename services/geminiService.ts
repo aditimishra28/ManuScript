@@ -136,4 +136,61 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
         console.error("Plan generation failed", e);
         return { diagnosis: "Unknown Issue", recommendation: "Manual inspection required", urgency: "Medium" };
     }
-}
+};
+
+/**
+ * VISUAL SIMULATION ENGINE
+ * Generates technical imagery to help operators visualize the problem.
+ * 
+ * Modes:
+ * 1. 'failure': Photorealistic rendering of the internal damage (e.g., rusted bearings).
+ * 2. 'thermal': Simulated thermal camera view highlighting hot spots.
+ * 3. 'diagram': Exploded view technical drawing of the specific component.
+ */
+export const generateVisualSimulation = async (
+    machineName: string, 
+    issueDescription: string, 
+    mode: 'failure' | 'thermal' | 'diagram'
+): Promise<string | null> => {
+    
+    let prompt = "";
+    
+    switch(mode) {
+        case 'failure':
+            prompt = `Photorealistic macro photography of internal components of a ${machineName}, showing severe damage: ${issueDescription}. Industrial lighting, grime, realistic texture, high detail, 4k.`;
+            break;
+        case 'thermal':
+            prompt = `Thermal camera heatmap visualization of a ${machineName}, indicating extreme heat (red/white) caused by ${issueDescription}. Dark blue background for cold areas, accurate industrial thermal imaging style.`;
+            break;
+        case 'diagram':
+            prompt = `Technical blueprint illustration, exploded view of ${machineName}, highlighting the component related to: ${issueDescription}. White lines on blue background, schematic style, engineering diagram.`;
+            break;
+    }
+
+    try {
+        // We use gemini-2.5-flash-image for fast generation, or gemini-3-pro-image-preview for high fidelity
+        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [{ text: prompt }]
+            },
+            config: {
+                imageConfig: {
+                    aspectRatio: "16:9", 
+                    numberOfImages: 1
+                }
+            }
+        }));
+
+        // Extract base64 image
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+                return `data:image/png;base64,${part.inlineData.data}`;
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error("Image generation failed", e);
+        return null;
+    }
+};

@@ -9,25 +9,22 @@ import {
   Activity, 
   Volume2, 
   Video,
-  VideoOff,
   Settings,
-  History,
   MonitorPlay,
   ClipboardList,
-  Calendar,
-  Zap,
-  Gauge,
-  Wifi,
   Cpu,
   Edit,
   Save,
   X,
-  Sparkles,
-  TrendingUp,
   Scan,
-  Eye
+  Eye,
+  ImageIcon,
+  Flame,
+  FileText,
+  Sparkles,
+  Wifi
 } from 'lucide-react';
-import { analyzeMachineHealth, generateMaintenancePlan } from '../services/geminiService';
+import { analyzeMachineHealth, generateMaintenancePlan, generateVisualSimulation } from '../services/geminiService';
 
 interface MachineModelProps {
   machine: Machine;
@@ -35,13 +32,19 @@ interface MachineModelProps {
 }
 
 type Tab = 'live' | 'config' | 'history';
-type Resolution = 'SD' | 'HD' | 'FHD';
+type SimulationMode = 'none' | 'failure' | 'thermal' | 'diagram';
 
 const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const [activeTab, setActiveTab] = useState<Tab>('live');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [structuredPlan, setStructuredPlan] = useState<any>(null);
+  
+  // Image Generation State
+  const [simulatedImage, setSimulatedImage] = useState<string | null>(null);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [simulationMode, setSimulationMode] = useState<SimulationMode>('none');
+  const [manualSimulationPrompt, setManualSimulationPrompt] = useState("Cracked shaft coupling");
 
   // Configuration Edit State
   const [isEditing, setIsEditing] = useState(false);
@@ -169,6 +172,24 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
         }
         setIsAnalyzing(false);
     }, 100); 
+  };
+  
+  const handleGenerateImage = async (mode: 'failure' | 'thermal' | 'diagram') => {
+      // Use the diagnosed issue OR the manual prompt if no issue is detected
+      const issue = structuredPlan?.diagnosis || manualSimulationPrompt;
+      
+      setIsGeneratingImage(true);
+      setSimulationMode(mode);
+      setSimulatedImage(null);
+      
+      const img = await generateVisualSimulation(
+          machine.type, 
+          issue, 
+          mode
+      );
+      
+      setSimulatedImage(img);
+      setIsGeneratingImage(false);
   };
 
   const validateAndSaveConfig = () => {
@@ -327,7 +348,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
             />
           </div>
 
-          {/* Right Column: AI Diagnostics */}
+          {/* Right Column: AI Diagnostics & Visual Lab */}
           <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 flex flex-col">
             <div className="flex items-center gap-3 mb-6">
                 <div className="p-2 bg-indigo-500/20 rounded-lg">
@@ -345,6 +366,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                     </div>
                 ) : aiInsight ? (
                     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        {/* Analysis Text */}
                         <div className="bg-indigo-950/30 border border-indigo-500/30 p-4 rounded-lg">
                             <h4 className="text-indigo-400 text-sm font-semibold mb-2 uppercase tracking-wider">Analysis Result</h4>
                             <p className="text-slate-300 text-sm leading-relaxed">
@@ -352,6 +374,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                             </p>
                         </div>
                         
+                        {/* Maintenance Plan (If Warning/Critical) */}
                         {structuredPlan && (
                             <div className="bg-slate-900 border border-slate-700 p-4 rounded-lg space-y-3">
                                 <div className="flex justify-between items-start">
@@ -382,6 +405,78 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                                 </div>
                             </div>
                         )}
+                        
+                        {/* Visual Simulation Lab - ALWAYS VISIBLE if analysis done */}
+                        <div className="bg-slate-900 border border-slate-700 p-4 rounded-lg space-y-3 mt-4">
+                            <div className="flex justify-between items-center border-b border-slate-800 pb-2 mb-2">
+                                <h5 className="text-[10px] text-slate-400 uppercase tracking-widest font-bold flex items-center gap-2">
+                                    <Sparkles className="w-3 h-3 text-indigo-400" />
+                                    Visual Simulation Lab
+                                </h5>
+                                <span className="text-[9px] bg-indigo-900/50 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 rounded">Generative AI</span>
+                            </div>
+                            
+                            {isGeneratingImage ? (
+                                <div className="h-48 bg-black rounded border border-indigo-500/30 flex flex-col items-center justify-center gap-2">
+                                    <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                                    <span className="text-xs text-indigo-300 animate-pulse">Generating Simulation...</span>
+                                </div>
+                            ) : simulatedImage ? (
+                                <div className="space-y-2 animate-in fade-in">
+                                    <div className="relative group">
+                                        <img src={simulatedImage} alt="AI Simulation" className="w-full h-48 object-cover rounded border border-slate-600" />
+                                        <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 rounded text-[10px] text-white uppercase border border-white/20">
+                                            {simulationMode === 'thermal' ? 'Synthetic Thermal Map' : simulationMode === 'diagram' ? 'Tech Blueprint' : 'Failure Simulation'}
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => setSimulatedImage(null)}
+                                        className="text-xs text-slate-400 hover:text-white underline w-full text-center"
+                                    >
+                                        Clear Simulation
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {/* If no Critical plan, allow manual scenario entry */}
+                                    {!structuredPlan && (
+                                        <div className="bg-slate-950 p-2 rounded border border-slate-800">
+                                            <label className="text-[10px] text-slate-500 block mb-1">Hypothetical Scenario (Demo)</label>
+                                            <input 
+                                                value={manualSimulationPrompt}
+                                                onChange={(e) => setManualSimulationPrompt(e.target.value)}
+                                                className="w-full bg-transparent border-none text-xs text-white focus:ring-0 p-0 placeholder-slate-600"
+                                                placeholder="e.g. Broken valve stem..."
+                                            />
+                                        </div>
+                                    )}
+                                    
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <button 
+                                            onClick={() => handleGenerateImage('thermal')}
+                                            className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
+                                        >
+                                            <Flame className="w-4 h-4 text-orange-500" />
+                                            <span className="text-[9px] text-slate-300">Heatmap</span>
+                                        </button>
+                                        <button 
+                                            onClick={() => handleGenerateImage('failure')}
+                                            className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
+                                        >
+                                            <ImageIcon className="w-4 h-4 text-rose-500" />
+                                            <span className="text-[9px] text-slate-300">Damage</span>
+                                        </button>
+                                        <button 
+                                            onClick={() => handleGenerateImage('diagram')}
+                                            className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
+                                        >
+                                            <FileText className="w-4 h-4 text-blue-500" />
+                                            <span className="text-[9px] text-slate-300">Blueprint</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 ) : (
                     <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">

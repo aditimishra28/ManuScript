@@ -1,186 +1,128 @@
 import { Machine, MachineStatus, Alert, SensorReading } from '../types';
-import { db, MachineRecord, SensorReadingRecord } from './db';
+import { db } from './db';
 import { generateMaintenancePlan } from './geminiService';
 
-// -- Helper: Map Gemini Urgency to Alert Severity --
-const mapUrgencyToSeverity = (urgency: string): 'low' | 'medium' | 'high' => {
-  const u = urgency?.toLowerCase() || '';
-  if (u === 'immediate' || u === 'high') return 'high';
-  if (u === 'medium') return 'medium';
-  return 'low';
+// -- Types for WebSocket Messages --
+type TelemetryMessage = {
+  type: 'TELEMETRY';
+  payload: {
+    machineId: string;
+    reading: SensorReading;
+    status: MachineStatus;
+  };
 };
 
-// -- Mock Data Generators --
-
-const generateInitialMachines = (): MachineRecord[] => {
-  return [
-    {
-      id: 'm1',
-      name: 'CNC Milling Station A',
-      type: 'CNC Mill',
-      location: 'Sector 4',
-      status: MachineStatus.NORMAL,
-      lastMaintenance: '2023-10-15',
-      imageUrl: 'https://picsum.photos/800/600?random=1',
-      modelNumber: 'CNC-X5000-PRO',
-      serialNumber: 'SN-78234912',
-      firmwareVersion: 'v4.2.1',
-      networkIp: '192.168.1.104',
-      installDate: '2021-03-12',
-      maxRpm: 15000,
-      powerRating: 25,
-      maintenanceInterval: 1000,
-      operatingHours: 8450,
-      lastCalibration: '2023-12-01'
-    },
-    {
-      id: 'm2',
-      name: 'Hydraulic Press 500T',
-      type: 'Press',
-      location: 'Sector 2',
-      status: MachineStatus.WARNING,
-      lastMaintenance: '2023-09-20',
-      imageUrl: 'https://picsum.photos/800/600?random=2',
-      modelNumber: 'HYD-P500-T',
-      serialNumber: 'SN-99283711',
-      firmwareVersion: 'v2.0.5',
-      networkIp: '192.168.1.112',
-      installDate: '2020-08-05',
-      maxRpm: 1500,
-      powerRating: 55,
-      maintenanceInterval: 500,
-      operatingHours: 12400,
-      lastCalibration: '2023-08-15'
-    },
-    {
-      id: 'm3',
-      name: 'Robotic Arm Assembly',
-      type: 'Robotics',
-      location: 'Sector 1',
-      status: MachineStatus.NORMAL,
-      lastMaintenance: '2023-11-01',
-      imageUrl: 'https://picsum.photos/800/600?random=3',
-      modelNumber: 'ROBO-KUKA-V2',
-      serialNumber: 'SN-44512399',
-      firmwareVersion: 'v5.1.0-beta',
-      networkIp: '192.168.1.108',
-      installDate: '2022-01-15',
-      maxRpm: 0,
-      powerRating: 12,
-      maintenanceInterval: 2000,
-      operatingHours: 4200,
-      lastCalibration: '2024-01-10'
-    },
-    {
-      id: 'm4',
-      name: 'Conveyor Motor System',
-      type: 'Conveyor',
-      location: 'Logistics',
-      status: MachineStatus.NORMAL,
-      lastMaintenance: '2023-08-10',
-      imageUrl: 'https://picsum.photos/800/600?random=4',
-      modelNumber: 'CONV-M200-S',
-      serialNumber: 'SN-11223344',
-      firmwareVersion: 'v1.4.2',
-      networkIp: '192.168.1.120',
-      installDate: '2019-11-22',
-      maxRpm: 3000,
-      powerRating: 15,
-      maintenanceInterval: 750,
-      operatingHours: 18900,
-      lastCalibration: '2023-06-30'
-    }
-  ];
+type AlertMessage = {
+  type: 'ALERT';
+  payload: Alert;
 };
 
-// DETERMINISTIC PHYSICS ENGINE
-// Use Sine waves based on Time to ensure all users see the same trends
-// at the same moment, regardless of client-side simulation.
-const generateReading = (prev: SensorReading | null, status: MachineStatus, timestamp: number): SensorReading => {
-  // Use a fixed epoch for sync
-  const t = timestamp / 1000; 
+type InitMessage = {
+  type: 'INIT';
+  payload: {
+    machines: Machine[];
+    recentAlerts: Alert[];
+  };
+};
 
-  // Base Targets based on Status
+type WSMessage = TelemetryMessage | AlertMessage | InitMessage;
+
+type PipelineListener = (machines: Machine[], alerts: Alert[]) => void;
+
+// -- Fallback Simulation Helpers (Kept for Dev Mode/Connection Failure) --
+// This ensures the app is usable even if the backend isn't running yet.
+const generateFallbackReading = (timestamp: number, status: MachineStatus): SensorReading => {
+  const t = timestamp / 1000;
   const baseVib = status === MachineStatus.NORMAL ? 2.5 : status === MachineStatus.WARNING ? 5.5 : 8.5;
   const baseTemp = status === MachineStatus.NORMAL ? 65 : status === MachineStatus.WARNING ? 78 : 95;
-  const baseNoise = status === MachineStatus.NORMAL ? 70 : 92;
-
-  // Add deterministic wave functions (Machinery vibration pattern)
-  // Math.sin(t) is deterministic. Math.random() is not.
-  const vibNoise = (Math.sin(t * 2) * 0.5) + (Math.cos(t * 5) * 0.2); 
-  const tempDrift = Math.sin(t * 0.1) * 2; // Slow temperature oscillation
-  const noiseSpike = Math.abs(Math.sin(t * 0.5)) * 5;
-
+  
   return {
-    timestamp: timestamp,
-    vibration: Math.max(0, baseVib + vibNoise),
-    temperature: Math.max(20, baseTemp + tempDrift),
-    noise: Math.max(40, baseNoise + noiseSpike),
+    timestamp,
+    vibration: Math.max(0, baseVib + (Math.sin(t * 2) * 0.5)),
+    temperature: Math.max(20, baseTemp + (Math.sin(t * 0.1) * 2)),
+    noise: Math.max(40, 70 + (Math.abs(Math.sin(t * 0.5)) * 5)),
     rpm: 1200 + (Math.sin(t) * 10),
     powerUsage: 45 + (Math.cos(t) * 2)
   };
 };
 
-type PipelineListener = (machines: Machine[], alerts: Alert[]) => void;
-
 class ManufacturingPipeline {
-  private machines: Machine[] = []; // In-memory cache for UI
+  private machines: Machine[] = [];
   private alerts: Alert[] = [];
   private listeners: PipelineListener[] = [];
-  private intervalId: ReturnType<typeof setInterval> | null = null;
-  private readonly MAX_UI_HISTORY = 50;
-  private isInitialized = false;
   
-  // Hysteresis Tracking
-  private statusCounters: Map<string, { count: number, status: MachineStatus }> = new Map();
-  private lastTickTime: number = Date.now();
+  // WebSocket State
+  private ws: WebSocket | null = null;
+  private wsUrl: string = process.env.REACT_APP_WS_URL || 'ws://localhost:8080';
+  private isConnected = false;
+  private reconnectInterval: any = null;
+
+  // Fallback Simulation State
+  private simulationInterval: any = null;
+  private readonly MAX_UI_HISTORY = 50;
 
   constructor() {
-    // We defer initialization to start()
-  }
-
-  // Initialize DB and load state
-  private async initialize() {
-      if (this.isInitialized) return;
-      
-      await db.initializeWithDefaults(generateInitialMachines());
-      this.alerts = await db.alerts.orderBy('timestamp').reverse().limit(50).toArray();
-      this.machines = await db.getAllMachinesWithLatestHistory();
-      
-      this.isInitialized = true;
-      this.notify();
+    this.machines = []; 
   }
 
   public async start() {
-    if (this.intervalId) return;
+    console.log("Starting Pipeline...");
     
-    console.log("Initializing Pipeline & Database Connection...");
-    await this.initialize();
-    
-    console.log("Starting Manufacturing Pipeline...");
-    this.lastTickTime = Date.now();
-    this.intervalId = setInterval(() => this.tick(), 2000);
-    
-    // Prune data every minute
-    setInterval(() => db.pruneOldData(), 60000);
+    // 1. Try to load initial state from local DB (Cache)
+    try {
+      this.machines = await db.getAllMachinesWithLatestHistory();
+      this.alerts = await db.alerts.orderBy('timestamp').reverse().limit(50).toArray();
+      this.notify();
+    } catch (e) {
+      console.warn("Failed to load local DB cache", e);
+    }
+
+    // 2. Attempt WebSocket Connection
+    this.connectWebSocket();
   }
 
   public stop() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-      console.log("Stopping Manufacturing Pipeline...");
+    console.log("Stopping Pipeline...");
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
     }
+    if (this.reconnectInterval) clearInterval(this.reconnectInterval);
+    this.stopFallbackSimulation();
   }
 
   public subscribe(listener: PipelineListener) {
     this.listeners.push(listener);
-    if (this.isInitialized) {
-        listener(this.machines, this.alerts);
-    }
+    listener(this.machines, this.alerts);
     return () => {
       this.listeners = this.listeners.filter(l => l !== listener);
     };
+  }
+
+  public registerMachine(machineData: Partial<Machine>) {
+    // In a real app, this sends a POST request to the backend API
+    console.log("Registering machine via API...", machineData);
+    
+    // Optimistic UI update for demo purposes
+    const newMachine: Machine = {
+      id: `m${Date.now()}`,
+      name: machineData.name || 'New Machine',
+      type: machineData.type || 'Generic',
+      location: machineData.location || 'Unknown',
+      status: MachineStatus.NORMAL,
+      lastMaintenance: new Date().toISOString(),
+      history: [],
+      imageUrl: 'https://picsum.photos/800/600',
+      ...machineData
+    } as Machine;
+
+    this.machines.push(newMachine);
+    this.notify();
+
+    // If connected, send to backend
+    if (this.isConnected && this.ws) {
+        this.ws.send(JSON.stringify({ type: 'REGISTER_MACHINE', payload: newMachine }));
+    }
   }
 
   private notify() {
@@ -189,179 +131,201 @@ class ManufacturingPipeline {
     this.listeners.forEach(l => l(safeMachines, safeAlerts));
   }
 
-  public async registerMachine(machineData: Partial<Machine>) {
-      const newMachineRecord: MachineRecord = {
-          id: `m${Date.now().toString().slice(-4)}`,
-          name: machineData.name || 'Unknown Machine',
-          type: machineData.type || 'Generic',
-          location: machineData.location || 'Warehouse',
-          status: MachineStatus.NORMAL,
-          lastMaintenance: new Date().toISOString().split('T')[0],
-          imageUrl: `https://picsum.photos/800/600?random=${Math.floor(Math.random() * 100)}`,
-          modelNumber: machineData.modelNumber || 'GEN-001',
-          serialNumber: machineData.serialNumber || `SN-${Math.floor(Math.random() * 1000000)}`,
-          firmwareVersion: 'v1.0.0',
-          networkIp: machineData.networkIp || '192.168.1.200',
-          installDate: new Date().toISOString().split('T')[0],
-          maxRpm: 5000,
-          powerRating: 20,
-          maintenanceInterval: 1000,
-          operatingHours: 0,
-          lastCalibration: new Date().toISOString().split('T')[0]
-      };
+  // -- WebSocket Logic --
 
-      await db.machines.add(newMachineRecord);
-      this.machines.push({ ...newMachineRecord, history: [] });
-      this.notify();
-      return newMachineRecord;
+  private connectWebSocket() {
+    if (this.ws) return;
+
+    // console.log(`Connecting to Signal Server: ${this.wsUrl}`);
+    
+    try {
+        this.ws = new WebSocket(this.wsUrl);
+    } catch (error) {
+        // Immediate failure (e.g. invalid syntax)
+        console.warn("WebSocket initialization failed, defaulting to simulation.");
+        this.startFallbackSimulation();
+        return;
+    }
+
+    this.ws.onopen = () => {
+      console.log("✅ WebSocket Connected: Real-time stream active.");
+      this.isConnected = true;
+      this.stopFallbackSimulation(); // Stop fake data if real data is flowing
+    };
+
+    this.ws.onmessage = (event) => {
+      try {
+        const message: WSMessage = JSON.parse(event.data);
+        this.handleMessage(message);
+      } catch (e) {
+        console.error("Failed to parse WS message");
+      }
+    };
+
+    this.ws.onclose = () => {
+      // Only warn if we were previously connected, otherwise it's just initial fail
+      if (this.isConnected) {
+        console.warn("⚠️ WebSocket Disconnected. Switching to Offline Mode.");
+      }
+      this.isConnected = false;
+      this.ws = null;
+      this.startFallbackSimulation(); // Start fake data so UI doesn't freeze
+      this.scheduleReconnect();
+    };
+
+    this.ws.onerror = (event) => {
+      // Squelch the annoying "WebSocket Error [object Object]" log in console.
+      // We handle the fallback in onclose anyway.
+      // console.debug("WebSocket connection unavailable (using offline simulation).");
+    };
   }
 
-  // The "Backend" Tick
-  private async tick() {
-    if (!this.isInitialized) return;
+  private scheduleReconnect() {
+    if (this.reconnectInterval) return;
+    this.reconnectInterval = setInterval(() => {
+      // console.log("Attempting WebSocket Reconnect...");
+      this.connectWebSocket();
+    }, 5000);
+  }
 
-    const now = Date.now();
-    const timeDelta = now - this.lastTickTime;
-    
-    const steps = Math.min(Math.floor(timeDelta / 2000), 10) || 1;
-    
-    this.lastTickTime = now;
+  private handleMessage(msg: WSMessage) {
+    switch (msg.type) {
+      case 'INIT':
+        this.machines = msg.payload.machines;
+        this.alerts = msg.payload.recentAlerts;
+        this.notify();
+        break;
 
-    let updatedMachines = [...this.machines];
-    const readingsToLog: SensorReadingRecord[] = [];
-    const alertsToLog: Alert[] = [];
+      case 'TELEMETRY':
+        this.updateMachineState(msg.payload.machineId, msg.payload.reading, msg.payload.status);
+        break;
 
-    // Loop for catch-up steps (if any)
-    for (let i = 0; i < steps; i++) {
-        // Calculate timestamp for this step
-        const stepTime = now - ((steps - 1 - i) * 2000);
+      case 'ALERT':
+        this.handleNewAlert(msg.payload);
+        break;
+    }
+  }
 
-        updatedMachines = await Promise.all(updatedMachines.map(async (machine) => {
-            const lastReading = machine.history.length > 0 ? machine.history[machine.history.length - 1] : null;
-            
-            // Generate Reading
-            const newReading = generateReading(lastReading, machine.status, stepTime);
-            readingsToLog.push({ ...newReading, machineId: machine.id });
+  private updateMachineState(id: string, reading: SensorReading, status: MachineStatus) {
+    const machineIndex = this.machines.findIndex(m => m.id === id);
+    if (machineIndex === -1) return;
 
-            // Analyze
-            const analysis = this.detectAnomalies(machine, newReading);
-            
-            // State Update
-            const newHistory = [...machine.history, newReading].slice(-this.MAX_UI_HISTORY);
-            
-            // Only process alerts on the *last* step (Current Time) to avoid spamming alerts from the past
-            const isLastStep = i === steps - 1;
-            let finalAlert = (isLastStep) ? analysis.newAlert : undefined;
+    const machine = this.machines[machineIndex];
+    const newHistory = [...machine.history, reading].slice(-this.MAX_UI_HISTORY);
 
-            // Alert Enrichment (Only if real-time)
-            if (finalAlert) {
-                if (machine.status !== MachineStatus.CRITICAL && analysis.status === MachineStatus.CRITICAL) {
-                    try {
-                        const plan = await generateMaintenancePlan(finalAlert.message, machine.name);
-                        finalAlert.severity = mapUrgencyToSeverity(plan.urgency);
-                        finalAlert.message = `${finalAlert.message}. [AI: ${plan.diagnosis}]`;
-                    } catch (error) {
-                        console.warn("AI Alert Enrichment failed.", error);
-                    }
-                }
-                alertsToLog.push(finalAlert);
-                this.addAlert(finalAlert);
-            }
-            
-            if (isLastStep && machine.status !== analysis.status) {
-                db.updateMachineStatus(machine.id, analysis.status);
-            }
+    this.machines[machineIndex] = {
+      ...machine,
+      status,
+      history: newHistory
+    };
 
-            return {
-                ...machine,
-                history: newHistory,
-                status: isLastStep ? analysis.status : machine.status // Only update status on live tick
-            };
-        }));
+    // Async: Persist to local IndexedDB for offline cache
+    db.logReadings([{ ...reading, machineId: id }]).catch(() => {});
+    if (machine.status !== status) {
+        db.updateMachineStatus(id, status);
     }
 
-    if (readingsToLog.length > 0) {
-        db.logReadings(readingsToLog).catch(e => console.error("DB Write Error", e));
-    }
-    
-    if (alertsToLog.length > 0) {
-        Promise.all(alertsToLog.map(a => db.logAlert(a)));
-    }
-
-    this.machines = updatedMachines;
     this.notify();
   }
 
-  // Detect with Hysteresis (Debouncing)
-  private detectAnomalies(machine: Machine, reading: SensorReading): { status: MachineStatus, newAlert?: Alert } {
-      let proposedStatus = machine.status;
-      let newAlert: Alert | undefined;
+  private handleNewAlert(alert: Alert) {
+    this.alerts = [alert, ...this.alerts].slice(0, 50);
+    db.logAlert(alert);
+    this.notify();
 
-      // Logic: Determine what the status *should* be based on current frame
-      if (reading.temperature > 85 || reading.vibration > 7) {
-          proposedStatus = MachineStatus.CRITICAL;
-      } else if (reading.temperature > 75 || reading.vibration > 5) {
-          proposedStatus = MachineStatus.WARNING;
-      } else {
-          proposedStatus = MachineStatus.NORMAL;
-      }
-      
-      // Random Failures (Simulation only) - Use Deterministic Randomness based on Minute of hour
-      const currentMinute = new Date().getMinutes();
-      // Fail machine 2 during minute 15 and 45 of every hour for demo purposes
-      if (machine.id === 'm2' && (currentMinute === 15 || currentMinute === 45)) {
-           proposedStatus = MachineStatus.WARNING;
-      }
-
-      // Hysteresis Check
-      const tracker = this.statusCounters.get(machine.id) || { count: 0, status: machine.status };
-
-      if (proposedStatus !== machine.status) {
-          if (tracker.status === proposedStatus) {
-              tracker.count++;
-          } else {
-              tracker.status = proposedStatus;
-              tracker.count = 1;
-          }
-      } else {
-          tracker.count = 0; // Reset if we match current status
-      }
-      
-      this.statusCounters.set(machine.id, tracker);
-
-      // Threshold: Needs 3 ticks (6 seconds) to change state
-      if (tracker.count >= 3) {
-           if (proposedStatus === MachineStatus.CRITICAL && machine.status !== MachineStatus.CRITICAL) {
-              newAlert = {
-                  id: Math.random().toString(36).substr(2, 9),
-                  machineId: machine.id,
-                  machineName: machine.name,
-                  timestamp: reading.timestamp,
-                  severity: 'high',
-                  message: `Critical: ${reading.vibration > 7 ? 'Excessive Vibration' : 'Overheating'}`,
-                  value: reading.vibration > 7 ? reading.vibration : reading.temperature,
-                  sensorType: reading.vibration > 7 ? 'Vibration' : 'Temperature'
-              };
-           }
-           // Reset counter after state change
-           tracker.count = 0; 
-           this.statusCounters.set(machine.id, tracker);
-           return { status: proposedStatus, newAlert };
-      }
-
-      return { status: machine.status };
+    // Trigger AI analysis for high severity alerts if not present
+    if (alert.severity === 'high' && !alert.message.includes('[AI')) {
+       generateMaintenancePlan(alert.message, alert.machineName).then(plan => {
+           // In a real app, we would send this back to the backend
+           console.log("AI Analysis Generated:", plan);
+       });
+    }
   }
 
-  private addAlert(alert: Alert) {
-      // Dedup alerts
-      const recentAlert = this.alerts.find(a => 
-          a.machineId === alert.machineId && 
-          (Date.now() - a.timestamp) < 10000
-      );
+  // -- Fallback Simulation (For Demo/Offline) --
 
-      if (!recentAlert) {
-          this.alerts = [alert, ...this.alerts].slice(0, 50);
-      }
+  private startFallbackSimulation() {
+    if (this.simulationInterval) return;
+    console.log(">> Starting Client-Side Simulation (Offline Fallback)");
+    
+    // Ensure we have at least dummy machines if DB was empty
+    if (this.machines.length === 0) {
+        this.machines = [
+        {
+          id: 'm1',
+          name: 'CNC Milling Unit A',
+          type: 'CNC Mill',
+          location: 'Sector 1',
+          status: MachineStatus.NORMAL,
+          lastMaintenance: '2023-11-15',
+          history: [],
+          imageUrl: 'https://images.unsplash.com/photo-1565439398533-315185985834?q=80&w=1000&auto=format&fit=crop',
+          modelNumber: 'HAAS-VF2',
+          serialNumber: 'SN-8821-441'
+        },
+        {
+          id: 'm2',
+          name: 'Hydraulic Press B',
+          type: 'Press',
+          location: 'Sector 2',
+          status: MachineStatus.NORMAL,
+          lastMaintenance: '2023-10-01',
+          history: [],
+          imageUrl: 'https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?q=80&w=1000&auto=format&fit=crop',
+           modelNumber: 'HYD-500T',
+          serialNumber: 'SN-9922-112'
+        },
+        {
+          id: 'm3',
+          name: 'Robotic Arm C',
+          type: 'Robot',
+          location: 'Assembly Line',
+          status: MachineStatus.WARNING,
+          lastMaintenance: '2023-12-05',
+          history: [],
+          imageUrl: 'https://plus.unsplash.com/premium_photo-1661962495669-d72424626bd2?q=80&w=1000&auto=format&fit=crop',
+           modelNumber: 'KUKA-KR6',
+          serialNumber: 'SN-7733-991'
+        }
+       ];
+       this.notify();
+    }
+
+    this.simulationInterval = setInterval(() => {
+      const now = Date.now();
+      
+      this.machines.forEach((machine, index) => {
+        const reading = generateFallbackReading(now, machine.status);
+        
+        // Simple logic to flip status occasionally for demo
+        let status = machine.status;
+        if (Math.random() > 0.99) status = MachineStatus.WARNING;
+        if (Math.random() > 0.998) status = MachineStatus.CRITICAL;
+        if (Math.random() > 0.96 && status !== MachineStatus.NORMAL) status = MachineStatus.NORMAL;
+
+        this.updateMachineState(machine.id, reading, status);
+
+        if (status === MachineStatus.CRITICAL && machine.status !== MachineStatus.CRITICAL) {
+             const alert: Alert = {
+                 id: `al-${now}`,
+                 machineId: machine.id,
+                 machineName: machine.name,
+                 timestamp: now,
+                 severity: 'high',
+                 message: 'Critical anomaly detected in sensor readings.',
+                 value: reading.temperature
+             };
+             this.handleNewAlert(alert);
+        }
+      });
+    }, 2000);
+  }
+
+  private stopFallbackSimulation() {
+    if (this.simulationInterval) {
+      clearInterval(this.simulationInterval);
+      this.simulationInterval = null;
+    }
   }
 }
 
