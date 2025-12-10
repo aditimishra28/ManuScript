@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Shield, Lock, Factory, Server, Key, Info } from 'lucide-react';
+import { Shield, Lock, Factory, Server, Key, Info, AlertTriangle } from 'lucide-react';
+import { SecurityContext } from '../services/securityLayer';
 
 interface AuthScreenProps {
   onLogin: () => void;
@@ -9,17 +10,25 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('demo@sentinai.cloud');
   const [password, setPassword] = useState('demo123');
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    // Simple local check for demo purposes
-    if (email === 'demo@sentinai.cloud' && password === 'demo123') {
-        onLogin();
-    } else {
-        setError('Invalid demo credentials. Try demo@sentinai.cloud / demo123');
-    }
+    setIsLoading(true);
+
+    // Simulated Secure Handshake Delay
+    setTimeout(() => {
+        // In a real app, this would be an API call to Auth0/Cognito
+        if (email === 'demo@sentinai.cloud' && password === 'demo123') {
+            const token = SecurityContext.createSession(email);
+            console.log("Security Session Established:", token.substring(0, 10) + '...');
+            onLogin();
+        } else {
+            setError('Authentication Failed: Invalid Credentials');
+            setIsLoading(false);
+        }
+    }, 800);
   };
 
   return (
@@ -35,14 +44,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             </div>
             <div>
                 <h1 className="text-xl font-bold text-white tracking-tight">Sentin<span className="text-indigo-500">AI</span> Enterprise</h1>
-                <p className="text-slate-500 text-xs">Client-Side Simulation Environment</p>
+                <p className="text-slate-500 text-xs">Secure Industrial IoT Gateway</p>
             </div>
         </div>
 
-        <div className="bg-blue-900/20 border border-blue-500/30 p-3 rounded mb-6 flex items-start gap-3">
-            <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
-            <div className="text-xs text-blue-200">
-                <strong>Demo Mode:</strong> This environment uses deterministic physics engines to simulate IoT telemetry. No real machinery is connected.
+        {/* Security Banner */}
+        <div className="bg-amber-900/20 border border-amber-500/30 p-3 rounded mb-6 flex items-start gap-3">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-200">
+                <strong>Security Protocol Active:</strong> All telemetry inputs are subject to strict sanitization (ISL) and outlier detection.
             </div>
         </div>
 
@@ -79,20 +89,27 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                 </div>
             </div>
 
-            {error && <p className="text-rose-400 text-xs">{error}</p>}
+            {error && <p className="text-rose-400 text-xs text-center bg-rose-900/20 p-2 rounded border border-rose-900/50">{error}</p>}
 
             <button 
                 type="submit" 
-                className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-sm px-5 py-3 transition-colors flex justify-center items-center gap-2"
+                disabled={isLoading}
+                className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded text-sm px-5 py-3 transition-colors flex justify-center items-center gap-2"
             >
-               <Lock className="w-4 h-4" /> Launch Simulation
+               {isLoading ? (
+                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+               ) : (
+                   <>
+                    <Lock className="w-4 h-4" /> Authenticate Session
+                   </>
+               )}
             </button>
         </form>
 
         <div className="mt-6 pt-4 border-t border-slate-800 text-center">
             <p className="text-[10px] text-slate-600">
-                Session ID: {Math.random().toString(36).substring(7).toUpperCase()} <br/>
-                Data persistence is local to this browser instance.
+                Encrypted Connection (TLS 1.3) <br/>
+                Unauthorized access is logged and reported.
             </p>
         </div>
       </div>

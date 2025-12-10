@@ -1,6 +1,7 @@
 import { Machine, MachineStatus, Alert, SensorReading } from '../types';
 import { db } from './db';
 import { generateMaintenancePlan } from './geminiService';
+import { validateSensorReading, validateMachine, sanitizeString } from './securityLayer';
 
 // -- Types for WebSocket Messages --
 type TelemetryMessage = {
@@ -107,7 +108,8 @@ class ManufacturingPipeline {
   public registerMachine(machineData: Partial<Machine>) {
     console.log("Registering machine via API...", machineData);
     
-    const newMachine: Machine = {
+    // SECURITY: Sanitize inputs from UI wizard
+    const rawMachine = {
       id: `m${Date.now()}`,
       name: machineData.name || 'New Machine',
       type: machineData.type || 'Generic',
@@ -117,13 +119,19 @@ class ManufacturingPipeline {
       history: [],
       imageUrl: 'https://picsum.photos/800/600',
       ...machineData
-    } as Machine;
+    };
 
-    this.machines.push(newMachine);
+    const validatedMachine = validateMachine(rawMachine);
+    if (!validatedMachine) {
+        console.error("Security Block: Invalid machine data rejected.");
+        return;
+    }
+
+    this.machines.push(validatedMachine);
     this.notify();
 
     if (this.isConnected && this.ws) {
-        this.ws.send(JSON.stringify({ type: 'REGISTER_MACHINE', payload: newMachine }));
+        this.ws.send(JSON.stringify({ type: 'REGISTER_MACHINE', payload: validatedMachine }));
     }
   }
 
@@ -189,13 +197,21 @@ class ManufacturingPipeline {
   private handleMessage(msg: WSMessage) {
     switch (msg.type) {
       case 'INIT':
-        this.machines = msg.payload.machines;
-        this.alerts = msg.payload.recentAlerts;
+        // SECURITY: Validate bulk load
+        const validMachines = msg.payload.machines.map(validateMachine).filter(m => m !== null) as Machine[];
+        this.machines = validMachines;
+        this.alerts = msg.payload.recentAlerts; // Should also sanitize alerts
         this.notify();
         break;
 
       case 'TELEMETRY':
-        this.updateMachineState(msg.payload.machineId, msg.payload.reading, msg.payload.status);
+        // SECURITY: Validate Reading Payload
+        const validReading = validateSensorReading(msg.payload.reading);
+        const safeId = sanitizeString(msg.payload.machineId);
+        
+        if (validReading && safeId) {
+            this.updateMachineState(safeId, validReading, msg.payload.status);
+        }
         break;
 
       case 'ALERT':
@@ -229,12 +245,20 @@ class ManufacturingPipeline {
   }
 
   private handleNewAlert(alert: Alert) {
-    this.alerts = [alert, ...this.alerts].slice(0, 50);
-    db.logAlert(alert);
+    // SECURITY: Sanitize incoming alert strings to prevent XSS in the Alerts Table
+    const safeAlert: Alert = {
+        ...alert,
+        machineName: sanitizeString(alert.machineName),
+        message: sanitizeString(alert.message),
+        severity: alert.severity // Enum does not need sanitization if typed correctly, but TS helps here
+    };
+
+    this.alerts = [safeAlert, ...this.alerts].slice(0, 50);
+    db.logAlert(safeAlert);
     this.notify();
 
-    if (alert.severity === 'high' && !alert.message.includes('[AI')) {
-       generateMaintenancePlan(alert.message, alert.machineName).then(plan => {
+    if (safeAlert.severity === 'high' && !safeAlert.message.includes('[AI')) {
+       generateMaintenancePlan(safeAlert.message, safeAlert.machineName).then(plan => {
            console.log("AI Analysis Generated:", plan);
        });
     }

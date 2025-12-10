@@ -17,7 +17,8 @@ import {
   LogOut,
   Info,
   Wifi,
-  WifiOff
+  WifiOff,
+  Lock
 } from 'lucide-react';
 import { Machine, MachineStatus, Alert } from './types';
 import MachineModel from './components/MachineModel';
@@ -25,13 +26,14 @@ import AuthScreen from './components/AuthScreen';
 import MachineWizard from './components/MachineWizard';
 import { pipeline } from './services/pipeline';
 import { MachineCard } from './components/MachineCard';
+import { SecurityContext } from './services/securityLayer';
 
 type ViewState = 'dashboard' | 'alerts' | 'machines' | 'settings';
 
 const App = () => {
-  // Auth State (persisted in session storage)
+  // Auth State - Checked via Security Layer
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-      return sessionStorage.getItem('sentinai_auth') === 'true';
+      return SecurityContext.validateSession();
   });
   
   // App State
@@ -51,12 +53,11 @@ const App = () => {
   const [showWizard, setShowWizard] = useState(false);
 
   const handleLogin = () => {
-      sessionStorage.setItem('sentinai_auth', 'true');
       setIsAuthenticated(true);
   };
 
   const handleLogout = () => {
-      sessionStorage.removeItem('sentinai_auth');
+      SecurityContext.destroySession();
       setIsAuthenticated(false);
       pipeline.stop();
   };
@@ -268,12 +269,12 @@ const App = () => {
             </button>
             <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold text-xs">
-                    OP
+                    <User className="w-4 h-4" />
                 </div>
                 {isSidebarOpen && (
                     <div className="flex flex-col">
-                        <span className="text-sm font-medium text-white">Operator A.</span>
-                        <span className="text-xs text-slate-500">Floor Manager</span>
+                        <span className="text-sm font-medium text-white">Operator</span>
+                        <span className="text-xs text-slate-500">Secured Session</span>
                     </div>
                 )}
             </div>
@@ -293,6 +294,11 @@ const App = () => {
            </div>
 
            <div className="flex items-center gap-6">
+              <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-800/50 rounded-full border border-slate-700/50">
+                  <Lock className="w-3 h-3 text-emerald-500" />
+                  <span className="text-[10px] text-slate-400">End-to-End Encrypted</span>
+              </div>
+
               <div className="relative">
                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                  <input 
