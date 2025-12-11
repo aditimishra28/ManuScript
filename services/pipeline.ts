@@ -43,10 +43,10 @@ const generateFallbackReading = (timestamp: number, status: MachineStatus): Sens
   
   return {
     timestamp,
-    vibration: Math.max(0, baseVib + (Math.sin(t * 2) * 0.5)),
-    temperature: Math.max(20, baseTemp + (Math.sin(t * 0.1) * 2)),
-    noise: Math.max(40, 70 + (Math.abs(Math.sin(t * 0.5)) * 5)),
-    rpm: 1200 + (Math.sin(t) * 10),
+    vibration: Math.max(0, baseVib + (Math.sin(t * 2) * 0.5) + (Math.random() * 0.5)),
+    temperature: Math.max(20, baseTemp + (Math.sin(t * 0.1) * 2) + (Math.random())),
+    noise: Math.max(40, 70 + (Math.abs(Math.sin(t * 0.5)) * 5) + (Math.random() * 2)),
+    rpm: 1200 + (Math.sin(t) * 10) + (Math.random() * 5),
     powerUsage: 45 + (Math.cos(t) * 2)
   };
 };
@@ -319,11 +319,16 @@ class ManufacturingPipeline {
       this.machines.forEach((machine, index) => {
         const reading = generateFallbackReading(now, machine.status);
         
-        // Simple logic to flip status occasionally for demo
+        // Tuned for Demo: Slightly higher chance of issues to show off the AI
         let status = machine.status;
-        if (Math.random() > 0.99) status = MachineStatus.WARNING;
-        if (Math.random() > 0.998) status = MachineStatus.CRITICAL;
-        if (Math.random() > 0.96 && status !== MachineStatus.NORMAL) status = MachineStatus.NORMAL;
+        
+        // 1.5% chance to go Warning
+        if (Math.random() > 0.985) status = MachineStatus.WARNING;
+        // 0.5% chance to go Critical
+        if (Math.random() > 0.995) status = MachineStatus.CRITICAL;
+        
+        // 5% chance to Self-Heal (Simulated Operator Fix) if not normal
+        if (Math.random() > 0.95 && status !== MachineStatus.NORMAL) status = MachineStatus.NORMAL;
 
         this.updateMachineState(machine.id, reading, status);
 

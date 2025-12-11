@@ -52,8 +52,12 @@ const App = () => {
   // Modal State
   const [showWizard, setShowWizard] = useState(false);
 
+  // User info state
+  const [currentUser, setCurrentUser] = useState({ name: 'Operator', role: 'Viewer' });
+
   const handleLogin = () => {
       setIsAuthenticated(true);
+      setCurrentUser(SecurityContext.getUser());
   };
 
   const handleLogout = () => {
@@ -62,9 +66,12 @@ const App = () => {
       pipeline.stop();
   };
 
-  // Initialize Pipeline Subscription
+  // Initialize Pipeline Subscription and User Info
   useEffect(() => {
     if (isAuthenticated) {
+        // Load user info
+        setCurrentUser(SecurityContext.getUser());
+
         // Start the backend pipeline only after login
         pipeline.start();
 
@@ -268,13 +275,13 @@ const App = () => {
                 {isSidebarOpen && <span className="text-sm">Sign Out</span>}
             </button>
             <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold text-xs">
-                    <User className="w-4 h-4" />
+                <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold text-xs uppercase">
+                    {currentUser.name.charAt(0)}
                 </div>
                 {isSidebarOpen && (
                     <div className="flex flex-col">
-                        <span className="text-sm font-medium text-white">Operator</span>
-                        <span className="text-xs text-slate-500">Secured Session</span>
+                        <span className="text-sm font-medium text-white truncate max-w-[140px]">{currentUser.name}</span>
+                        <span className="text-xs text-slate-500">{currentUser.role} Session</span>
                     </div>
                 )}
             </div>
@@ -432,11 +439,11 @@ const App = () => {
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-sm text-slate-400 mb-1">Display Name</label>
-                                <input type="text" defaultValue="Operator A." className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white" />
+                                <input type="text" value={currentUser.name} readOnly className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white cursor-default" />
                             </div>
                             <div>
                                 <label className="block text-sm text-slate-400 mb-1">Role</label>
-                                <input type="text" defaultValue="Floor Manager" disabled className="w-full bg-slate-950/50 border border-slate-800 rounded p-2 text-slate-500 cursor-not-allowed" />
+                                <input type="text" value={currentUser.role} disabled className="w-full bg-slate-950/50 border border-slate-800 rounded p-2 text-slate-500 cursor-not-allowed" />
                             </div>
                         </div>
                     </div>

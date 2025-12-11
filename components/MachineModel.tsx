@@ -22,7 +22,9 @@ import {
   Flame,
   FileText,
   Sparkles,
-  Wifi
+  Wifi,
+  Wrench,
+  PackageSearch
 } from 'lucide-react';
 import { analyzeMachineHealth, generateMaintenancePlan, generateVisualSimulation } from '../services/geminiService';
 
@@ -32,7 +34,7 @@ interface MachineModelProps {
 }
 
 type Tab = 'live' | 'config' | 'history';
-type SimulationMode = 'none' | 'failure' | 'thermal' | 'diagram';
+type SimulationMode = 'none' | 'failure' | 'thermal' | 'diagram' | 'part_detail' | 'repair_step';
 
 const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const [activeTab, setActiveTab] = useState<Tab>('live');
@@ -184,7 +186,9 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
     }, 100); 
   };
   
-  const handleGenerateImage = async (mode: 'failure' | 'thermal' | 'diagram') => {
+  const handleGenerateImage = async (mode: SimulationMode) => {
+      if (mode === 'none') return;
+
       // Use the diagnosed issue OR the manual prompt if no issue is detected
       const issue = structuredPlan?.diagnosis || manualSimulationPrompt;
       
@@ -419,13 +423,6 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                                         </div>
                                     </div>
                                 </div>
-                                <button 
-                                    onClick={() => handleGenerateImage('failure')}
-                                    className="w-full mt-2 py-1.5 bg-rose-900/30 hover:bg-rose-900/50 border border-rose-700/50 rounded text-xs text-rose-300 flex items-center justify-center gap-2 transition-colors"
-                                >
-                                    <ImageIcon className="w-3 h-3" />
-                                    Visualize Failure Scenario
-                                </button>
                             </div>
                         )}
                         
@@ -434,29 +431,29 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                             <div className="flex justify-between items-center border-b border-slate-800 pb-2 mb-2">
                                 <h5 className="text-[10px] text-slate-400 uppercase tracking-widest font-bold flex items-center gap-2">
                                     <Sparkles className="w-3 h-3 text-indigo-400" />
-                                    Visual Simulation Lab
+                                    Generative Action Lab
                                 </h5>
-                                <span className="text-[9px] bg-indigo-900/50 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 rounded">Generative AI</span>
+                                <span className="text-[9px] bg-indigo-900/50 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 rounded">Gemini Imogen</span>
                             </div>
                             
                             {isGeneratingImage ? (
                                 <div className="h-48 bg-black rounded border border-indigo-500/30 flex flex-col items-center justify-center gap-2">
                                     <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                                    <span className="text-xs text-indigo-300 animate-pulse">Generating Simulation...</span>
+                                    <span className="text-xs text-indigo-300 animate-pulse">Generating Visualization...</span>
                                 </div>
                             ) : simulatedImage ? (
                                 <div className="space-y-2 animate-in fade-in">
                                     <div className="relative group">
                                         <img src={simulatedImage} alt="AI Simulation" className="w-full h-48 object-cover rounded border border-slate-600" />
                                         <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 rounded text-[10px] text-white uppercase border border-white/20">
-                                            {simulationMode === 'thermal' ? 'Synthetic Thermal Map' : simulationMode === 'diagram' ? 'Tech Blueprint' : 'Failure Simulation'}
+                                            Generated: {simulationMode.replace('_', ' ')}
                                         </div>
                                     </div>
                                     <button 
                                         onClick={() => setSimulatedImage(null)}
                                         className="text-xs text-slate-400 hover:text-white underline w-full text-center"
                                     >
-                                        Clear Simulation
+                                        Return to Controls
                                     </button>
                                 </div>
                             ) : (
@@ -464,7 +461,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                                     {/* If no Critical plan, allow manual scenario entry */}
                                     {!structuredPlan && (
                                         <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                                            <label className="text-[10px] text-slate-500 block mb-1">Hypothetical Scenario (Demo)</label>
+                                            <label className="text-[10px] text-slate-500 block mb-1">Scenario (Simulated)</label>
                                             <input 
                                                 value={manualSimulationPrompt}
                                                 onChange={(e) => setManualSimulationPrompt(e.target.value)}
@@ -474,28 +471,43 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                                         </div>
                                     )}
                                     
-                                    <div className="grid grid-cols-3 gap-2">
-                                        <button 
-                                            onClick={() => handleGenerateImage('thermal')}
-                                            className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
-                                        >
-                                            <Flame className="w-4 h-4 text-orange-500" />
-                                            <span className="text-[9px] text-slate-300">Heatmap</span>
-                                        </button>
-                                        <button 
-                                            onClick={() => handleGenerateImage('failure')}
-                                            className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
-                                        >
-                                            <ImageIcon className="w-4 h-4 text-rose-500" />
-                                            <span className="text-[9px] text-slate-300">Damage</span>
-                                        </button>
-                                        <button 
-                                            onClick={() => handleGenerateImage('diagram')}
-                                            className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
-                                        >
-                                            <FileText className="w-4 h-4 text-blue-500" />
-                                            <span className="text-[9px] text-slate-300">Blueprint</span>
-                                        </button>
+                                    {/* Categorized Generation Buttons */}
+                                    <div>
+                                        <div className="text-[9px] text-slate-500 uppercase font-bold mb-1.5 pl-1">Diagnostics</div>
+                                        <div className="grid grid-cols-2 gap-2 mb-3">
+                                            <button 
+                                                onClick={() => handleGenerateImage('thermal')}
+                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
+                                            >
+                                                <Flame className="w-4 h-4 text-orange-500" />
+                                                <span className="text-[9px] text-slate-300">Heatmap</span>
+                                            </button>
+                                            <button 
+                                                onClick={() => handleGenerateImage('failure')}
+                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
+                                            >
+                                                <ImageIcon className="w-4 h-4 text-rose-500" />
+                                                <span className="text-[9px] text-slate-300">Int. Damage</span>
+                                            </button>
+                                        </div>
+                                        
+                                        <div className="text-[9px] text-slate-500 uppercase font-bold mb-1.5 pl-1">Intervention</div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <button 
+                                                onClick={() => handleGenerateImage('part_detail')}
+                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
+                                            >
+                                                <PackageSearch className="w-4 h-4 text-emerald-500" />
+                                                <span className="text-[9px] text-slate-300">Spare Part</span>
+                                            </button>
+                                            <button 
+                                                onClick={() => handleGenerateImage('repair_step')}
+                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
+                                            >
+                                                <Wrench className="w-4 h-4 text-blue-500" />
+                                                <span className="text-[9px] text-slate-300">Repair Guide</span>
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             )}

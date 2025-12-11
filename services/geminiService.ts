@@ -181,20 +181,29 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
 export const generateVisualSimulation = async (
     machineName: string, 
     issueDescription: string, 
-    mode: 'failure' | 'thermal' | 'diagram'
+    mode: 'failure' | 'thermal' | 'diagram' | 'part_detail' | 'repair_step'
 ): Promise<string | null> => {
     
     let prompt = "";
     
     switch(mode) {
+        // STRATEGY 1: DIAGNOSTIC DIGITAL TWINS
         case 'failure':
-            prompt = `Photorealistic macro photography of internal components of a ${machineName}, showing severe damage: ${issueDescription}. Industrial lighting, grime, realistic texture, high detail, 4k.`;
+            prompt = `Photorealistic macro photography of internal components of a ${machineName}, showing severe damage: ${issueDescription}. Industrial lighting, grime, realistic texture, high detail, 4k. Focus on the failure point.`;
             break;
         case 'thermal':
             prompt = `Thermal camera heatmap visualization of a ${machineName}, indicating extreme heat (red/white) caused by ${issueDescription}. Dark blue background for cold areas, accurate industrial thermal imaging style.`;
             break;
         case 'diagram':
             prompt = `Technical blueprint illustration, exploded view of ${machineName}, highlighting the component related to: ${issueDescription}. White lines on blue background, schematic style, engineering diagram.`;
+            break;
+            
+        // STRATEGY 2: INTERVENTION & REPAIR VISUALS
+        case 'part_detail':
+            prompt = `Studio product photography of a heavy industrial spare part for a ${machineName}, specifically the component related to: ${issueDescription}. Clean white background, high resolution, industrial catalog style. Isolate the part.`;
+            break;
+        case 'repair_step':
+            prompt = `Instructional technical illustration of a maintenance technician's hands using tools to fix ${issueDescription} on a ${machineName}. Blue and white vector line art style, IKEA manual aesthetic, clear action, safety gloves visible.`;
             break;
     }
 

@@ -5,8 +5,12 @@ import { SensorReading, Machine, Alert } from '../types';
  * Handles Input Sanitization, Data Validation, and Session Management.
  */
 
+// -- Constants for Storage Keys --
+const STORAGE_KEY_USERS = 'sentinai_users_db';
+const STORAGE_KEY_TOKEN = 'sentinai_token';
+const STORAGE_KEY_USER_INFO = 'sentinai_user_info';
+
 // -- Input Sanitization (XSS Prevention) --
-// Strips potentially dangerous characters from strings coming from external Websockets
 export const sanitizeString = (str: string): string => {
     if (!str) return '';
     return str
@@ -19,7 +23,6 @@ export const sanitizeString = (str: string): string => {
 };
 
 // -- Data Integrity --
-// Ensures sensor readings are finite numbers to prevent Math errors or Chart crashes
 export const validateSensorReading = (reading: any): SensorReading | null => {
     if (!reading || typeof reading !== 'object') return null;
 
@@ -41,49 +44,111 @@ export const validateSensorReading = (reading: any): SensorReading | null => {
 export const validateMachine = (machine: any): Machine | null => {
     if (!machine || !machine.id) return null;
     
-    // Whitelist allowed URLs for images to prevent external resource loading attacks
     const safeImage = (url: string) => {
         if (!url) return '';
         if (url.startsWith('https://images.unsplash.com') || url.startsWith('https://picsum.photos') || url.startsWith('data:image')) {
             return url;
         }
-        return 'https://picsum.photos/800/600'; // Fallback safe image
+        return 'https://picsum.photos/800/600'; 
     };
 
     return {
         ...machine,
-        name: sanitizeString(machine.name).substring(0, 50), // Truncate to prevent UI overflow DoS
+        name: sanitizeString(machine.name).substring(0, 50),
         type: sanitizeString(machine.type),
         location: sanitizeString(machine.location),
         imageUrl: safeImage(machine.imageUrl)
     } as Machine;
 };
 
-// -- Session Management (Simulated) --
-// In a real app, this would validate JWT signatures.
+// -- Auth & Session Management --
+
+// Initialize Mock DB if empty
+const initMockDB = () => {
+    if (!localStorage.getItem(STORAGE_KEY_USERS)) {
+        const defaultUsers = [
+            { email: 'demo@sentinai.cloud', password: 'demo123', name: 'Demo Operator', role: 'Admin' }
+        ];
+        localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(defaultUsers));
+    }
+};
+
 export const SecurityContext = {
-    createSession: (user: string) => {
-        // Generate a fake session token
-        const token = `sik_${Date.now()}_${Math.random().toString(36).substring(2)}`;
-        sessionStorage.setItem('sentinai_token', token);
-        sessionStorage.setItem('sentinai_user', sanitizeString(user));
-        return token;
+    
+    // Create a new user in the local mock DB
+    register: (email: string, password: string, name: string) => {
+        initMockDB();
+        const users = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || '[]');
+        
+        // Check if user exists
+        if (users.find((u: any) => u.email === email)) {
+            return { success: false, message: 'Account already exists for this email.' };
+        }
+
+        const newUser = { 
+            email, 
+            password, // In a real app, this MUST be hashed (e.g. bcrypt)
+            name: sanitizeString(name),
+            role: 'Operator'
+        };
+        
+        users.push(newUser);
+        localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
+        return { success: true };
     },
 
+    // Authenticate user
+    login: (email: string, password: string, rememberMe: boolean) => {
+        initMockDB();
+        const users = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || '[]');
+        const user = users.find((u: any) => u.email === email && u.password === password);
+
+        if (user) {
+            // Generate Session Token
+            const token = `sik_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+            const userInfo = JSON.stringify({ name: user.name, email: user.email, role: user.role });
+
+            // Store in requested storage medium
+            const storage = rememberMe ? localStorage : sessionStorage;
+            
+            // Clear opposite storage to prevent conflicts
+            (rememberMe ? sessionStorage : localStorage).removeItem(STORAGE_KEY_TOKEN);
+            (rememberMe ? sessionStorage : localStorage).removeItem(STORAGE_KEY_USER_INFO);
+
+            storage.setItem(STORAGE_KEY_TOKEN, token);
+            storage.setItem(STORAGE_KEY_USER_INFO, userInfo);
+            
+            return { success: true, token };
+        }
+        
+        return { success: false, message: 'Invalid credentials' };
+    },
+
+    // Check if a valid session exists
     validateSession: (): boolean => {
-        const token = sessionStorage.getItem('sentinai_token');
-        // Basic check: Token must exist and be recent (mock expiry logic)
+        const token = sessionStorage.getItem(STORAGE_KEY_TOKEN) || localStorage.getItem(STORAGE_KEY_TOKEN);
         if (!token || !token.startsWith('sik_')) return false;
         return true;
     },
 
-    destroySession: () => {
-        sessionStorage.removeItem('sentinai_token');
-        sessionStorage.removeItem('sentinai_user');
-        sessionStorage.removeItem('sentinai_auth'); // Cleanup legacy
+    // Get current user details
+    getUser: () => {
+        const userStr = sessionStorage.getItem(STORAGE_KEY_USER_INFO) || localStorage.getItem(STORAGE_KEY_USER_INFO);
+        if (userStr) {
+            try {
+                return JSON.parse(userStr);
+            } catch (e) {
+                return { name: 'Unknown Operator', role: 'Guest' };
+            }
+        }
+        return { name: 'Guest', role: 'Viewer' };
     },
 
-    getUser: () => {
-        return sessionStorage.getItem('sentinai_user') || 'Unknown Operator';
+    // Logout
+    destroySession: () => {
+        sessionStorage.removeItem(STORAGE_KEY_TOKEN);
+        sessionStorage.removeItem(STORAGE_KEY_USER_INFO);
+        localStorage.removeItem(STORAGE_KEY_TOKEN);
+        localStorage.removeItem(STORAGE_KEY_USER_INFO);
     }
 };
