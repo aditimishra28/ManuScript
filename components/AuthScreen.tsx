@@ -90,7 +90,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                 <div className="p-2.5 bg-indigo-500 rounded-xl shadow-lg shadow-indigo-500/20">
                     <Factory className="w-8 h-8 text-white" />
                 </div>
-                <h1 className="text-2xl font-bold text-white tracking-tight">Sentin<span className="text-indigo-400">AI</span></h1>
+                <div>
+                    <h1 className="text-2xl font-bold text-white tracking-tight">ManuScript<span className="text-indigo-400">.ai</span></h1>
+                    <p className="text-[10px] text-indigo-300 font-medium tracking-wider uppercase">Powered by Google Gemini</p>
+                </div>
              </div>
              
              <div className="mt-20">
@@ -117,7 +120,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
         </div>
 
         <div className="relative z-10 text-xs text-indigo-400/60 mt-auto">
-            &copy; 2024 SentinAI Industrial Solutions. Enterprise Edition v2.5
+            &copy; 2024 ManuScript.ai Industrial Solutions. Enterprise Edition v2.5
         </div>
       </div>
 

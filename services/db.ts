@@ -12,14 +12,14 @@ export interface MachineRecord extends Omit<Machine, 'history'> {
     // We don't store the full history array in the machine table to keep it lightweight.
 }
 
-class SentinAIDatabase extends Dexie {
+class ManuscriptAIDatabase extends Dexie {
   machines!: Table<MachineRecord, string>;
   readings!: Table<SensorReadingRecord, number>;
   alerts!: Table<Alert, string>;
   logs!: Table<LogEntry, number>;
 
   constructor() {
-    super('SentinAIDB');
+    super('ManuscriptAIDB');
     
     (this as any).version(2).stores({
       machines: 'id, status, type', 
@@ -218,4 +218,4 @@ class SentinAIDatabase extends Dexie {
   }
 }
 
-export const db = new SentinAIDatabase();
+export const db = new ManuscriptAIDatabase();

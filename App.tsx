@@ -278,9 +278,20 @@ const App = () => {
       
       {/* Sidebar */}
       <aside className={`${isSidebarOpen ? 'w-64' : 'w-20'} transition-all duration-300 bg-slate-900 border-r border-slate-800 flex flex-col z-20`}>
-        <div className="p-6 flex items-center gap-3 border-b border-slate-800">
-           <Factory className="w-8 h-8 text-indigo-500 shrink-0" />
-           {isSidebarOpen && <span className="font-bold text-xl tracking-tight text-white">Sentin<span className="text-indigo-500">AI</span></span>}
+        <div className="p-6 border-b border-slate-800">
+           <div className="flex items-center gap-3">
+               <Factory className="w-8 h-8 text-indigo-500 shrink-0" />
+               {isSidebarOpen && (
+                   <div>
+                       <span className="font-bold text-xl tracking-tight text-white">ManuScript<span className="text-indigo-500">.ai</span></span>
+                   </div>
+               )}
+           </div>
+           {isSidebarOpen && (
+               <div className="mt-1 text-[9px] text-indigo-400 font-medium tracking-wider pl-11 uppercase opacity-80">
+                   Powered by Google Gemini
+               </div>
+           )}
         </div>
         
         <nav className="flex-1 p-4 space-y-2">

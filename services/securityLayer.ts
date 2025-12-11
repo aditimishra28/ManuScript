@@ -1,14 +1,14 @@
 import { SensorReading, Machine, Alert } from '../types';
 
 /**
- * SENTINAI SECURITY LAYER
+ * MANUSCRIPT.AI SECURITY LAYER
  * Handles Input Sanitization, Data Validation, and Session Management.
  */
 
 // -- Constants for Storage Keys --
-const STORAGE_KEY_USERS = 'sentinai_users_db';
-const STORAGE_KEY_TOKEN = 'sentinai_token';
-const STORAGE_KEY_USER_INFO = 'sentinai_user_info';
+const STORAGE_KEY_USERS = 'manuscript_ai_users_db';
+const STORAGE_KEY_TOKEN = 'manuscript_ai_token';
+const STORAGE_KEY_USER_INFO = 'manuscript_ai_user_info';
 
 // -- Input Sanitization (XSS Prevention) --
 export const sanitizeString = (str: string): string => {
@@ -67,7 +67,7 @@ export const validateMachine = (machine: any): Machine | null => {
 const initMockDB = () => {
     if (!localStorage.getItem(STORAGE_KEY_USERS)) {
         const defaultUsers = [
-            { email: 'demo@sentinai.cloud', password: 'demo123', name: 'Demo Operator', role: 'Admin' }
+            { email: 'demo@manuscript.ai', password: 'demo123', name: 'Demo Operator', role: 'Admin' }
         ];
         localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(defaultUsers));
     }
@@ -105,7 +105,7 @@ export const SecurityContext = {
 
         if (user) {
             // Generate Session Token
-            const token = `sik_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+            const token = `mai_${Date.now()}_${Math.random().toString(36).substring(2)}`;
             const userInfo = JSON.stringify({ name: user.name, email: user.email, role: user.role });
 
             // Store in requested storage medium
@@ -127,7 +127,7 @@ export const SecurityContext = {
     // Check if a valid session exists
     validateSession: (): boolean => {
         const token = sessionStorage.getItem(STORAGE_KEY_TOKEN) || localStorage.getItem(STORAGE_KEY_TOKEN);
-        if (!token || !token.startsWith('sik_')) return false;
+        if (!token || !token.startsWith('mai_')) return false;
         return true;
     },
 
