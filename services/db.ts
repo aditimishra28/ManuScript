@@ -138,6 +138,11 @@ class ManuscriptAIDatabase extends Dexie {
       await this.machines.update(id, { status });
   }
 
+  async upsertMachine(id: string, machine: Machine) {
+      const { history, ...machineRecord } = machine;
+      await this.machines.put(machineRecord);
+  }
+
   // -- COST-EFFECTIVE DATA STRATEGY: DOWNSAMPLING (ROLLUPS) --
   
   /**

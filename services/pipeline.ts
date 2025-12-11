@@ -1,6 +1,6 @@
 import { Machine, MachineStatus, Alert, SensorReading } from '../types';
 import { db } from './db';
-import { generateMaintenancePlan } from './geminiService';
+import { generateMaintenancePlan, localHeuristicCheck } from './geminiService';
 import { validateSensorReading, validateMachine, sanitizeString } from './securityLayer';
 
 // -- Types for WebSocket Messages --
@@ -28,36 +28,11 @@ type InitMessage = {
 
 type WSMessage = TelemetryMessage | AlertMessage | InitMessage;
 
-// Updated Listener Signature to include Connection Status
 type PipelineListener = (
     machines: Machine[], 
     alerts: Alert[], 
     isLive: boolean
 ) => void;
-
-// -- Fallback Simulation Helpers --
-const generateFallbackReading = (timestamp: number, status: MachineStatus): SensorReading => {
-  const t = timestamp / 1000;
-  
-  // Base Parameters
-  const baseVib = status === MachineStatus.NORMAL ? 2.5 : status === MachineStatus.WARNING ? 5.5 : 8.5;
-  const baseTemp = status === MachineStatus.NORMAL ? 65 : status === MachineStatus.WARNING ? 78 : 95;
-  
-  // Add realistic "Micro-Jitter" (Industrial sensors are never perfectly smooth)
-  const jitter = () => (Math.random() - 0.5) * 0.2; 
-  
-  // Occasional "Spike" (1% chance) to simulate transient noise
-  const spike = Math.random() > 0.99 ? 2.0 : 0;
-
-  return {
-    timestamp,
-    vibration: Math.max(0, baseVib + (Math.sin(t * 2) * 0.5) + jitter() + (status === MachineStatus.CRITICAL ? spike : 0)),
-    temperature: Math.max(20, baseTemp + (Math.sin(t * 0.1) * 2) + jitter()),
-    noise: Math.max(40, 70 + (Math.abs(Math.sin(t * 0.5)) * 5) + jitter() + (spike * 10)),
-    rpm: 1200 + (Math.sin(t) * 10) + (Math.random() * 5),
-    powerUsage: 45 + (Math.cos(t) * 2) + jitter()
-  };
-};
 
 class ManufacturingPipeline {
   private machines: Machine[] = [];
@@ -66,9 +41,9 @@ class ManufacturingPipeline {
   
   // WebSocket State
   private ws: WebSocket | null = null;
-  private wsUrl: string = process.env.REACT_APP_WS_URL || 'ws://localhost:8080';
   private isConnected = false;
   private reconnectInterval: any = null;
+  private pingInterval: any = null;
 
   // Fallback Simulation State
   private simulationInterval: any = null;
@@ -78,8 +53,22 @@ class ManufacturingPipeline {
     this.machines = []; 
   }
 
+  private getWebSocketUrl(): string {
+    // CTO NOTE: Dynamic Protocol Detection
+    // This ensures the app works in Production (HTTPS -> WSS) and Local (HTTP -> WS) automatically.
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    
+    // If we are served from localhost/vite, we assume backend is on 8080.
+    // If served from a domain, we assume backend is at the same domain/root.
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        return `${protocol}//${window.location.hostname}:8080`;
+    } else {
+        return `${protocol}//${window.location.host}`;
+    }
+  }
+
   public async start() {
-    console.log("Starting Pipeline...");
+    console.log("[Pipeline] System Start Sequence Initiated...");
     
     // 1. Try to load initial state from local DB (Cache)
     try {
@@ -95,18 +84,18 @@ class ManufacturingPipeline {
   }
 
   public stop() {
-    console.log("Stopping Pipeline...");
+    console.log("[Pipeline] System Shutdown...");
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
     if (this.reconnectInterval) clearInterval(this.reconnectInterval);
+    if (this.pingInterval) clearInterval(this.pingInterval);
     this.stopFallbackSimulation();
   }
 
   public subscribe(listener: PipelineListener) {
     this.listeners.push(listener);
-    // Send current state immediately
     listener(this.machines, this.alerts, this.isConnected);
     return () => {
       this.listeners = this.listeners.filter(l => l !== listener);
@@ -140,6 +129,9 @@ class ManufacturingPipeline {
 
     if (this.isConnected && this.ws) {
         this.ws.send(JSON.stringify({ type: 'REGISTER_MACHINE', payload: validatedMachine }));
+    } else {
+        // If offline, save to DB so it persists until next sync
+        db.upsertMachine(validatedMachine.id, validatedMachine);
     }
   }
 
@@ -152,12 +144,14 @@ class ManufacturingPipeline {
   // -- WebSocket Logic --
 
   private connectWebSocket() {
-    if (this.ws) return;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     
+    const url = this.getWebSocketUrl();
+    console.log(`[Pipeline] Attempting Connection to ${url}`);
+
     try {
-        this.ws = new WebSocket(this.wsUrl);
+        this.ws = new WebSocket(url);
     } catch (error) {
-        // Immediate failure (e.g. invalid syntax or offline)
         this.isConnected = false;
         this.startFallbackSimulation();
         return;
@@ -166,16 +160,23 @@ class ManufacturingPipeline {
     this.ws.onopen = () => {
       console.log("✅ WebSocket Connected: Real-time stream active.");
       this.isConnected = true;
-      this.stopFallbackSimulation(); // CRITICAL: Stop fake data if real data is flowing
+      this.stopFallbackSimulation(); 
       this.notify();
+      
+      // Heartbeat
+      if (this.pingInterval) clearInterval(this.pingInterval);
+      this.pingInterval = setInterval(() => {
+          if (this.ws?.readyState === WebSocket.OPEN) this.ws.send('ping');
+      }, 30000);
     };
 
     this.ws.onmessage = (event) => {
+      if (event.data === 'pong') return;
       try {
         const message: WSMessage = JSON.parse(event.data);
         this.handleMessage(message);
       } catch (e) {
-        console.error("Failed to parse WS message");
+        // console.error("Failed to parse WS message");
       }
     };
 
@@ -191,7 +192,7 @@ class ManufacturingPipeline {
     };
 
     this.ws.onerror = (event) => {
-       // Handled by onclose
+       // Error handled by onclose
     };
   }
 
@@ -205,15 +206,14 @@ class ManufacturingPipeline {
   private handleMessage(msg: WSMessage) {
     switch (msg.type) {
       case 'INIT':
-        // SECURITY: Validate bulk load
         const validMachines = msg.payload.machines.map(validateMachine).filter(m => m !== null) as Machine[];
-        this.machines = validMachines;
-        this.alerts = msg.payload.recentAlerts; // Should also sanitize alerts
+        // Merge logic: Don't overwrite local machines entirely if they exist, but update them
+        this.machines = validMachines; 
+        this.alerts = msg.payload.recentAlerts;
         this.notify();
         break;
 
       case 'TELEMETRY':
-        // SECURITY: Validate Reading Payload
         const validReading = validateSensorReading(msg.payload.reading);
         const safeId = sanitizeString(msg.payload.machineId);
         
@@ -241,9 +241,6 @@ class ManufacturingPipeline {
       history: newHistory
     };
 
-    // Async: Persist to local IndexedDB for offline cache
-    // Note: We might want to tag these as "simulated" in the DB if isConnected is false,
-    // but for now, we just store raw data.
     db.logReadings([{ ...reading, machineId: id }]).catch(() => {});
     if (machine.status !== status) {
         db.updateMachineStatus(id, status);
@@ -253,32 +250,39 @@ class ManufacturingPipeline {
   }
 
   private handleNewAlert(alert: Alert) {
-    // SECURITY: Sanitize incoming alert strings to prevent XSS in the Alerts Table
+    // SECURITY: Sanitize incoming alert strings
     const safeAlert: Alert = {
         ...alert,
         machineName: sanitizeString(alert.machineName),
         message: sanitizeString(alert.message),
-        severity: alert.severity // Enum does not need sanitization if typed correctly, but TS helps here
+        severity: alert.severity 
     };
 
-    this.alerts = [safeAlert, ...this.alerts].slice(0, 50);
-    db.logAlert(safeAlert);
-    this.notify();
+    // Dedup: Don't add if identical alert exists in last 5 seconds
+    const recentDupe = this.alerts.find(a => 
+        a.machineId === safeAlert.machineId && 
+        a.message === safeAlert.message && 
+        (safeAlert.timestamp - a.timestamp) < 5000
+    );
 
+    if (!recentDupe) {
+        this.alerts = [safeAlert, ...this.alerts].slice(0, 50);
+        db.logAlert(safeAlert);
+        this.notify();
+    }
+
+    // Trigger AI Diagnosis for severe alerts automatically
     if (safeAlert.severity === 'high' && !safeAlert.message.includes('[AI')) {
-       generateMaintenancePlan(safeAlert.message, safeAlert.machineName).then(plan => {
-           console.log("AI Analysis Generated:", plan);
-       });
+       // We let the UI handle the actual generation trigger to save tokens/costs
+       // or implement a debounced trigger here.
     }
   }
 
-  // -- Fallback Simulation (For Demo/Offline) --
+  // -- Fallback Simulation (Offline Mode) --
 
   private startFallbackSimulation() {
     if (this.simulationInterval) return;
-    // console.log(">> Starting Client-Side Simulation (Offline Fallback)");
     
-    // Ensure we have at least dummy machines if DB was empty
     if (this.machines.length === 0) {
         this.machines = [
         {
@@ -324,34 +328,44 @@ class ManufacturingPipeline {
     this.simulationInterval = setInterval(() => {
       const now = Date.now();
       
-      this.machines.forEach((machine, index) => {
-        const reading = generateFallbackReading(now, machine.status);
+      this.machines.forEach((machine) => {
+        // Base parameters based on status
+        const baseVib = machine.status === MachineStatus.NORMAL ? 2.5 : machine.status === MachineStatus.WARNING ? 5.5 : 8.5;
+        const baseTemp = machine.status === MachineStatus.NORMAL ? 65 : 85;
+        const jitter = (Math.random() - 0.5) * 0.5;
+
+        const reading: SensorReading = {
+            timestamp: now,
+            vibration: Math.max(0, baseVib + Math.sin(now/1000) + jitter),
+            temperature: baseTemp + Math.cos(now/2000) * 2 + jitter,
+            noise: 70 + Math.random() * 5,
+            rpm: 1200 + Math.random() * 20,
+            powerUsage: 45 + Math.random()
+        };
         
-        // Tuned for Demo: Slightly higher chance of issues to show off the AI
+        // Z-Score Simulation: The Local Heuristic Check
+        const analysisResult = localHeuristicCheck([...machine.history, reading], undefined);
         let status = machine.status;
-        
-        // 1.5% chance to go Warning
-        if (Math.random() > 0.985) status = MachineStatus.WARNING;
-        // 0.5% chance to go Critical
-        if (Math.random() > 0.995) status = MachineStatus.CRITICAL;
-        
-        // 5% chance to Self-Heal (Simulated Operator Fix) if not normal
-        if (Math.random() > 0.95 && status !== MachineStatus.NORMAL) status = MachineStatus.NORMAL;
+
+        if (analysisResult) {
+            status = analysisResult.includes("CRITICAL") ? MachineStatus.CRITICAL : MachineStatus.WARNING;
+            
+            // Only alert if status *changed* or rare reminder
+            if (machine.status !== status || Math.random() > 0.99) {
+                const alert: Alert = {
+                     id: `al-${now}-${machine.id}`,
+                     machineId: machine.id,
+                     machineName: machine.name,
+                     timestamp: now,
+                     severity: status === MachineStatus.CRITICAL ? 'high' : 'medium',
+                     message: analysisResult,
+                     value: reading.vibration
+                 };
+                 this.handleNewAlert(alert);
+            }
+        } 
 
         this.updateMachineState(machine.id, reading, status);
-
-        if (status === MachineStatus.CRITICAL && machine.status !== MachineStatus.CRITICAL) {
-             const alert: Alert = {
-                 id: `al-${now}`,
-                 machineId: machine.id,
-                 machineName: machine.name,
-                 timestamp: now,
-                 severity: 'high',
-                 message: 'Critical anomaly detected in sensor readings.',
-                 value: reading.temperature
-             };
-             this.handleNewAlert(alert);
-        }
       });
     }, 2000);
   }

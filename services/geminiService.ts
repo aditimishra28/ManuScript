@@ -10,10 +10,24 @@ const INDUSTRIAL_CONTEXT_ENFORCER = "CONTEXT: Industrial manufacturing environme
 // Helper for delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Helper to clean JSON string from Markdown wrapping
+// Helper to clean JSON string from Markdown wrapping and extra text
 const cleanJson = (text: string): string => {
     if (!text) return "{}";
-    return text.replace(/```json|```/g, '').trim();
+    // 1. Remove Markdown code blocks
+    let cleaned = text.replace(/```json|```/g, '');
+    
+    // 2. Find the first '{' and last '}' to extract valid JSON object
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    
+    if (firstBrace !== -1 && lastBrace !== -1) {
+        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    } else {
+        // Fallback: if no braces found, return empty object string
+        return "{}";
+    }
+    
+    return cleaned.trim();
 };
 
 // Helper to retry failed requests
@@ -30,8 +44,8 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Prom
   }
 }
 
-// -- EDGE COMPUTING SIMULATION --
-const calculateZScore = (value: number, history: number[]): number => {
+// -- EDGE COMPUTING SIMULATION (PHASE 4A) --
+export const calculateZScore = (value: number, history: number[]): number => {
     if (history.length < 5) return 0;
     const mean = history.reduce((a, b) => a + b, 0) / history.length;
     const stdDev = Math.sqrt(history.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / history.length);
@@ -39,13 +53,15 @@ const calculateZScore = (value: number, history: number[]): number => {
     return (value - mean) / stdDev;
 };
 
-const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string | null => {
+export const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string | null => {
     if (readings.length < 10) return null;
     const latest = readings[readings.length - 1];
     
+    // 1. Hard Limits (Safety Cutoffs)
     if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL: Vibration exceeds safety limits (ISO 10816 Zone D). Immediate shutdown recommended.";
     if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL: Core overheating detected. Fire hazard.";
 
+    // 2. Statistical Anomaly Detection (Z-Score)
     const recentVibs = readings.slice(-20).map(r => r.vibration);
     const zScoreVib = calculateZScore(latest.vibration, recentVibs);
     
@@ -56,7 +72,7 @@ const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string
     return null;
 };
 
-// Analyze raw textual sensor data AND human logs
+// Analyze raw textual sensor data AND human logs (PHASE 4B)
 export const analyzeMachineHealth = async (
   machine: Machine,
   recentReadings: SensorReading[],
@@ -70,7 +86,8 @@ export const analyzeMachineHealth = async (
       return `[Automated Protection System]: ${localInsight}`;
   }
 
-  const readingsSummary = recentReadings.slice(-10).map(r => 
+  // Expanded Context Window per User Guide (Last 50 readings)
+  const readingsSummary = recentReadings.slice(-50).map(r => 
     `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}`
   ).join('\n');
 
@@ -83,7 +100,7 @@ export const analyzeMachineHealth = async (
     Analyze the machine health by cross-referencing Sensor Telemetry with Operator Observations.
     Machine: "${machine.name}" (${machine.type}).
     
-    Data:
+    Data (Last 50 Points):
     ${readingsSummary}
     
     Logs:
@@ -95,7 +112,7 @@ export const analyzeMachineHealth = async (
     Analyze patterns. If a failure is detected, identify the SPECIFIC component responsible (e.g. "Inner Race Bearing", "Coolant Pump Impeller", "Axis Lead Screw").
     
     Output:
-    Concise technical assessment (under 50 words). Focus on root cause component.
+    Concise technical assessment (under 50 words). Focus on root cause component. Do not format as JSON.
   `;
 
   try {
@@ -111,9 +128,7 @@ export const analyzeMachineHealth = async (
 };
 
 /**
- * NEW FEATURE: MULTIMODAL VISION INSPECTION
- * Allows the operator to upload a photo, and Gemini analyzes it alongside sensor data.
- * Returns structured JSON with bounding boxes.
+ * PHASE 4D: VISION VERIFICATION (GROUNDING)
  */
 export const analyzeAttachedImage = async (
     machineName: string, 
@@ -122,7 +137,7 @@ export const analyzeAttachedImage = async (
     currentDiagnosis: string
 ) => {
     const prompt = `
-        You are a Senior Industrial Mechanic. 
+        You are a Senior Industrial Mechanic performing Visual Verification (Grounding). 
         Context: The machine '${machineName}' is flagging sensor alerts with the diagnosis: "${currentDiagnosis}".
         
         Task:
@@ -135,8 +150,12 @@ export const analyzeAttachedImage = async (
         {
             "analysis": "Short direct observation for the operator.",
             "issueDetected": boolean,
-            "boundingBox": [ymin, xmin, ymax, xmax] // Array of 4 integers (0-1000 scale) outlining the specific defective component. If no specific defect is visible, return null.
+            "boundingBox": [ymin, xmin, ymax, xmax] 
         }
+        
+        Note: boundingBox must be an array of 4 integers normalized to a 0-1000 scale.
+        Example: [100, 200, 500, 600] for a box in the middle.
+        If no specific defect is visible, return null for boundingBox.
     `;
 
     try {
@@ -204,7 +223,7 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
 };
 
 /**
- * VISUAL SIMULATION ENGINE (ANTI-HALLUCINATION ENHANCED)
+ * PHASE 4C: GENERATIVE SIMULATION LAB (HERO FEATURE)
  */
 export const generateVisualSimulation = async (
     machineInfo: string, 
@@ -214,22 +233,22 @@ export const generateVisualSimulation = async (
 ): Promise<string | null> => {
     
     let prompt = "";
-    const NEGATIVE_PROMPT = "Exclude: people faces, human bodies, animals, biological matter, artistic abstraction, blur, low resolution, text overlays, watermarks, cartoon style.";
-    const STYLE_GUIDE = "Style: Photorealistic Industrial Macro Photography. Lighting: Neutral studio lighting, high contrast, sharp focus on mechanical details. Texture: Metallic, grease, rust, rubber, steel.";
+    const NEGATIVE_PROMPT = "Exclude: people faces, human bodies, animals, biological matter, artistic abstraction, blur, low resolution, text overlays, watermarks, cartoon style, sketch, drawing.";
+    const STYLE_GUIDE = "Style: 8k resolution, Photorealistic Industrial Macro Photography, Cinematic Lighting, Ray Tracing, Metallic Texture, High Contrast, Sharp Focus.";
 
     switch(mode) {
         case 'golden_sample':
             prompt = `Reference Image: A brand new, factory-perfect replacement part for a ${machineInfo}. 
             Component Context: ${context}. 
-            Visuals: Clean metal, perfect alignment, no wear, no dust, no rust. 
-            View: Isometric or top-down engineering view.`;
+            Visuals: Clean chrome/metal, perfect alignment, no wear, no dust, no rust. 
+            View: Isometric or top-down engineering view on a clean workstation.`;
             break;
             
         case 'defect_current':
-            prompt = `Failure Analysis Image: A close-up of a damaged component on a ${machineInfo}. 
+            prompt = `Failure Analysis Image: A close-up of a broken/damaged component on a ${machineInfo}. 
             Diagnosis: ${context}.
-            Visuals: Depict specific signs of failure such as heat discoloration (blueing), metal shavings, heavy rust, cracking, or severe misalignment. 
-            The image should serve as visual evidence of the breakdown.`;
+            Visuals: Depict specific signs of failure such as severe heat discoloration (blueing), sheared metal, heavy rust, cracking, or severe misalignment. 
+            The image should serve as forensic visual evidence of the breakdown.`;
             break;
             
         case 'repair_step':
@@ -268,7 +287,7 @@ export const generateVisualSimulation = async (
     }
 };
 
-// ... existing audio functions ...
+// PHASE 4E: AUDIO SIGNATURE ANALYSIS
 export const analyzeAudioSignature = async (machineType: string, base64Audio: string, mimeType: string = "audio/webm") => {
     const prompt = `
       You are an Acoustic Engineer. Listen to this recording of a ${machineType}.

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Factory, Wifi, CheckCircle, ArrowRight, ShieldCheck, Database, Server, X } from 'lucide-react';
+import { Factory, Wifi, CheckCircle, ArrowRight, ShieldCheck, X, Sparkles, Loader2, Server } from 'lucide-react';
 import { pipeline } from '../services/pipeline';
 
 interface MachineWizardProps {
@@ -10,6 +10,7 @@ interface MachineWizardProps {
 const MachineWizard: React.FC<MachineWizardProps> = ({ onClose, onComplete }) => {
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+  
   const [formData, setFormData] = useState({
       name: '',
       type: 'CNC Mill',
@@ -18,51 +19,48 @@ const MachineWizard: React.FC<MachineWizardProps> = ({ onClose, onComplete }) =>
       deviceKey: ''
   });
 
-  const handleNext = () => {
+  const handleNext = async () => {
       if (step === 2) {
-          // Simulate Pairing Process
           setIsLoading(true);
-          setTimeout(() => {
-              setIsLoading(false);
-              setStep(3);
-          }, 2000);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          setIsLoading(false);
+          setStep(3);
       } else {
           setStep(prev => prev + 1);
       }
   };
 
   const handleFinish = () => {
-      // Add to pipeline
       pipeline.registerMachine({
           name: formData.name,
           type: formData.type,
           location: formData.location,
           serialNumber: formData.serialNumber,
-          networkIp: `10.0.0.${Math.floor(Math.random() * 255)}`
+          networkIp: `10.0.0.${Math.floor(Math.random() * 255)}`,
+          imageUrl: 'https://picsum.photos/800/600'
       });
       onComplete();
   };
 
   const renderStepIndicator = () => (
-      <div className="flex justify-between items-center mb-8 px-4">
+      <div className="flex justify-between items-center mb-8 px-4 relative">
           {[1, 2, 3].map((s) => (
-              <div key={s} className="flex flex-col items-center z-10">
+              <div key={s} className="flex flex-col items-center z-10 relative">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all duration-500 ${
                       step >= s 
-                      ? 'bg-indigo-600 border-indigo-600 text-white' 
-                      : 'bg-slate-900 border-slate-700 text-slate-500'
-                  }`}>
+                      ? 'bg-white dark:bg-navy-950 border-blue-950 dark:border-white text-blue-950 dark:text-white' 
+                      : 'bg-slate-100 dark:bg-navy-900 border-slate-300 dark:border-navy-700 text-slate-400 dark:text-slate-500'
+                  } ${step > s ? 'bg-blue-950 dark:bg-white border-blue-950 dark:border-white text-white dark:text-navy-950' : ''}`}>
                       {step > s ? <CheckCircle className="w-5 h-5" /> : s}
                   </div>
-                  <div className="text-[10px] mt-2 font-medium text-slate-400 uppercase tracking-wider">
+                  <div className={`text-[10px] mt-2 font-medium uppercase tracking-wider ${step >= s ? 'text-blue-950 dark:text-white' : 'text-slate-500'}`}>
                       {s === 1 ? 'Profile' : s === 2 ? 'Pairing' : 'Verify'}
                   </div>
               </div>
           ))}
-          {/* Progress Bar Line */}
-          <div className="absolute top-[86px] left-[15%] right-[15%] h-0.5 bg-slate-800 -z-0">
+          <div className="absolute top-[15px] left-[10%] right-[10%] h-0.5 bg-slate-200 dark:bg-navy-800 -z-0">
              <div 
-                className="h-full bg-indigo-600 transition-all duration-500" 
+                className="h-full bg-blue-950 dark:bg-white transition-all duration-500" 
                 style={{ width: step === 1 ? '0%' : step === 2 ? '50%' : '100%' }}
              />
           </div>
@@ -70,41 +68,40 @@ const MachineWizard: React.FC<MachineWizardProps> = ({ onClose, onComplete }) =>
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
-      <div className="bg-slate-900 w-full max-w-lg rounded-2xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 dark:bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-navy-950 w-full max-w-lg rounded-2xl border border-slate-200 dark:border-navy-800 shadow-2xl overflow-hidden flex flex-col relative text-slate-900 dark:text-white">
          
-         <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-             <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                 <Factory className="w-5 h-5 text-indigo-500" /> 
+         <div className="p-6 border-b border-slate-200 dark:border-navy-800 flex justify-between items-center bg-slate-50 dark:bg-navy-900/50">
+             <h2 className="text-xl font-bold flex items-center gap-2 text-blue-950 dark:text-white">
+                 <Factory className="w-5 h-5" /> 
                  Register New Asset
              </h2>
-             <button onClick={onClose} className="text-slate-500 hover:text-white"><X className="w-5 h-5" /></button>
+             <button onClick={onClose} className="text-slate-400 hover:text-blue-950 dark:hover:text-white transition-colors"><X className="w-5 h-5" /></button>
          </div>
 
          <div className="p-8 relative">
              {renderStepIndicator()}
 
-             <div className="mt-6 min-h-[250px]">
+             <div className="mt-6 min-h-[280px]">
                  
-                 {/* STEP 1: ASSET DETAILS */}
                  {step === 1 && (
                      <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                          <div>
-                             <label className="block text-xs font-medium text-slate-400 mb-1">Machine Name</label>
+                             <label className="block text-xs font-medium text-slate-500 mb-1">Machine Name</label>
                              <input 
                                 value={formData.name}
                                 onChange={e => setFormData({...formData, name: e.target.value})}
                                 placeholder="e.g. Injection Molder B2"
-                                className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-sm text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                className="w-full bg-slate-50 dark:bg-navy-900 border border-slate-200 dark:border-navy-700 rounded p-3 text-sm text-slate-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
                              />
                          </div>
                          <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className="block text-xs font-medium text-slate-400 mb-1">Asset Type</label>
+                                <label className="block text-xs font-medium text-slate-500 mb-1">Asset Type</label>
                                 <select 
                                     value={formData.type}
                                     onChange={e => setFormData({...formData, type: e.target.value})}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-sm text-white focus:border-indigo-500 outline-none"
+                                    className="w-full bg-slate-50 dark:bg-navy-900 border border-slate-200 dark:border-navy-700 rounded p-3 text-sm text-slate-900 dark:text-white focus:border-blue-500 outline-none"
                                 >
                                     <option>CNC Mill</option>
                                     <option>Lathe</option>
@@ -115,110 +112,109 @@ const MachineWizard: React.FC<MachineWizardProps> = ({ onClose, onComplete }) =>
                                 </select>
                             </div>
                             <div>
-                                <label className="block text-xs font-medium text-slate-400 mb-1">Location / Zone</label>
+                                <label className="block text-xs font-medium text-slate-500 mb-1">Location / Zone</label>
                                 <input 
                                     value={formData.location}
                                     onChange={e => setFormData({...formData, location: e.target.value})}
-                                    placeholder="e.g. Sector 7"
-                                    className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-sm text-white focus:border-indigo-500 outline-none"
+                                    placeholder="e.g. Sector 7G"
+                                    className="w-full bg-slate-50 dark:bg-navy-900 border border-slate-200 dark:border-navy-700 rounded p-3 text-sm text-slate-900 dark:text-white focus:border-blue-500 outline-none"
                                 />
                             </div>
                          </div>
+                         <div>
+                             <label className="block text-xs font-medium text-slate-500 mb-1">Serial Number</label>
+                             <input 
+                                value={formData.serialNumber}
+                                onChange={e => setFormData({...formData, serialNumber: e.target.value})}
+                                placeholder="Manufacturer S/N"
+                                className="w-full bg-slate-50 dark:bg-navy-900 border border-slate-200 dark:border-navy-700 rounded p-3 text-sm text-slate-900 dark:text-white focus:border-blue-500 outline-none"
+                             />
+                         </div>
                      </div>
                  )}
 
-                 {/* STEP 2: PAIRING */}
                  {step === 2 && (
-                     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                         {isLoading ? (
-                             <div className="flex flex-col items-center justify-center h-[200px] text-center space-y-4">
-                                 <div className="relative">
-                                     <div className="w-16 h-16 rounded-full border-4 border-indigo-500/30 border-t-indigo-500 animate-spin"></div>
-                                     <Wifi className="w-6 h-6 text-indigo-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse" />
+                    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300 text-center py-4">
+                        <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-navy-800 flex items-center justify-center mx-auto mb-4 relative">
+                            <Wifi className="w-8 h-8 text-blue-950 dark:text-white animate-pulse" />
+                            <div className="absolute inset-0 rounded-full border border-blue-400 dark:border-blue-500 animate-ping opacity-50"></div>
+                        </div>
+                        <h3 className="text-lg font-semibold text-blue-950 dark:text-white">Device Discovery Mode</h3>
+                        <p className="text-sm text-slate-500 max-w-xs mx-auto">
+                            Enter the 6-digit pairing code from the HMI to initiate cryptographic handshake.
+                        </p>
+                        
+                        <input 
+                            value={formData.deviceKey}
+                            onChange={e => setFormData({...formData, deviceKey: e.target.value})}
+                            placeholder="000-000"
+                            className="bg-slate-50 dark:bg-navy-900 border border-slate-200 dark:border-navy-700 rounded-lg p-4 text-2xl text-center text-blue-950 dark:text-white tracking-[0.5em] font-mono focus:border-blue-500 outline-none w-64 mx-auto block uppercase"
+                            maxLength={7}
+                        />
+
+                        {isLoading && (
+                            <div className="flex items-center justify-center gap-2 text-slate-500 text-sm mt-4">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Verifying Security Token...
+                            </div>
+                        )}
+                    </div>
+                 )}
+
+                 {step === 3 && (
+                     <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                         <div className="bg-slate-50 dark:bg-navy-900/50 rounded-xl border border-slate-200 dark:border-navy-800 p-4 flex gap-4">
+                             <div className="w-16 h-16 rounded-lg bg-white dark:bg-navy-800 flex items-center justify-center border border-slate-200 dark:border-navy-700 shrink-0">
+                                 <Server className="w-8 h-8 text-slate-400" />
+                             </div>
+                             <div>
+                                 <h3 className="font-bold text-blue-950 dark:text-white text-lg">{formData.name}</h3>
+                                 <div className="flex flex-wrap gap-2 mt-2">
+                                     <span className="text-xs px-2 py-1 bg-slate-100 dark:bg-navy-800 text-slate-600 dark:text-slate-400 rounded border border-slate-200 dark:border-navy-700">
+                                        {formData.type}
+                                     </span>
+                                     <span className="text-xs px-2 py-1 bg-slate-100 dark:bg-navy-800 text-slate-600 dark:text-slate-400 rounded border border-slate-200 dark:border-navy-700">
+                                        {formData.location}
+                                     </span>
                                  </div>
-                                 <div>
-                                     <h3 className="text-white font-medium">Handshaking with Device...</h3>
-                                     <p className="text-sm text-slate-500">Exchanging crypto-keys and verifying hardware signature.</p>
+                                 <div className="mt-3 flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                                     <ShieldCheck className="w-3 h-3" /> Securely Paired via IoT Protocol
                                  </div>
                              </div>
-                         ) : (
-                             <>
-                                <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-lg p-4 flex gap-3">
-                                    <Server className="w-6 h-6 text-indigo-400 shrink-0" />
-                                    <div className="text-sm text-indigo-200">
-                                        Enter the 16-digit serial number found on the machine's controller unit to initiate secure pairing.
-                                    </div>
-                                </div>
-                                
-                                <div>
-                                    <label className="block text-xs font-medium text-slate-400 mb-1">Hardware Serial Number</label>
-                                    <input 
-                                        value={formData.serialNumber}
-                                        onChange={e => setFormData({...formData, serialNumber: e.target.value})}
-                                        placeholder="SN-XXXX-XXXX-XXXX"
-                                        className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-sm text-white font-mono uppercase tracking-widest focus:border-indigo-500 outline-none"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className="block text-xs font-medium text-slate-400 mb-1">Secure Pairing Key (Optional)</label>
-                                    <input 
-                                        type="password"
-                                        placeholder="•••• •••• ••••"
-                                        className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-sm text-white focus:border-indigo-500 outline-none"
-                                    />
-                                </div>
-                             </>
-                         )}
-                     </div>
-                 )}
-
-                 {/* STEP 3: VERIFICATION */}
-                 {step === 3 && (
-                     <div className="flex flex-col items-center justify-center h-[250px] text-center space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                         <div className="w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.2)]">
-                             <ShieldCheck className="w-10 h-10 text-emerald-500" />
                          </div>
-                         <div>
-                             <h3 className="text-xl font-bold text-white">Asset Verified & Secured</h3>
-                             <p className="text-slate-400 mt-2 max-w-xs mx-auto">
-                                 The machine <strong>{formData.name}</strong> has been successfully registered to the pipeline. Telemetry stream is active.
+
+                         <div className="p-4 bg-slate-100 dark:bg-navy-800/50 border border-slate-200 dark:border-navy-700 rounded-lg">
+                             <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase flex items-center gap-2 mb-2">
+                                 <Sparkles className="w-3 h-3" /> System Calibrated
+                             </h4>
+                             <p className="text-xs text-slate-500 dark:text-slate-400">
+                                 Connection established. Telemetry stream is now active and being analyzed by the anomaly detection engine.
                              </p>
                          </div>
-                         <div className="flex gap-4 text-xs text-slate-500">
-                             <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-emerald-500" /> Camera Linked</span>
-                             <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3 text-emerald-500" /> Sensors Calibrated</span>
-                         </div>
                      </div>
                  )}
+
              </div>
 
-             <div className="mt-8 flex justify-end gap-3 pt-6 border-t border-slate-800">
-                 {step < 3 && (
-                     <button 
-                        onClick={onClose}
-                        className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                     >
-                         Cancel
-                     </button>
-                 )}
+             <div className="mt-8 flex justify-end gap-3 pt-6 border-t border-slate-200 dark:border-navy-800">
+                 <button 
+                    onClick={onClose}
+                    className="px-4 py-2 text-sm text-slate-500 hover:text-blue-950 dark:hover:text-white transition-colors"
+                 >
+                     Cancel
+                 </button>
                  
-                 {step < 3 ? (
-                     <button 
-                        onClick={handleNext}
-                        disabled={step === 1 && !formData.name}
-                        className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                     >
-                         {step === 2 ? 'Establish Connection' : 'Next Step'} <ArrowRight className="w-4 h-4" />
-                     </button>
-                 ) : (
-                     <button 
-                        onClick={handleFinish}
-                        className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-all shadow-lg shadow-emerald-500/20"
-                     >
-                         Go to Dashboard
-                     </button>
-                 )}
+                 <button 
+                    onClick={step === 3 ? handleFinish : handleNext}
+                    disabled={(step === 1 && !formData.name) || (step === 2 && formData.deviceKey.length < 3) || isLoading}
+                    className="bg-blue-950 hover:bg-blue-900 dark:bg-white dark:hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-white dark:text-navy-950 px-6 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-lg shadow-blue-900/10 active:scale-95"
+                 >
+                     {step === 3 ? (
+                         <>Complete Setup <CheckCircle className="w-4 h-4" /></>
+                     ) : (
+                         <>Next Step <ArrowRight className="w-4 h-4" /></>
+                     )}
+                 </button>
              </div>
 
          </div>
