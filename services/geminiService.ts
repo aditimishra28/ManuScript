@@ -4,19 +4,13 @@ import { Machine, SensorReading, LogEntry } from "../types";
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // -- SAFETY & COMPLIANCE LAYER --
-// Pre-flight check to prevent injection attacks or non-industrial usage
-const FORBIDDEN_KEYWORDS = ['weapon', 'violence', 'blood', 'human face', 'child', 'political', 'hate'];
-const INDUSTRIAL_CONTEXT_ENFORCER = "Focus strictly on industrial machinery, mechanical failure modes, and engineering diagrams. Do not depict people.";
-
-const validatePromptSafety = (prompt: string): boolean => {
-    const lower = prompt.toLowerCase();
-    return !FORBIDDEN_KEYWORDS.some(kw => lower.includes(kw));
-};
+const FORBIDDEN_KEYWORDS = ['weapon', 'violence', 'blood', 'human face', 'child', 'political', 'hate', 'flesh', 'animal'];
+const INDUSTRIAL_CONTEXT_ENFORCER = "CONTEXT: Industrial manufacturing environment only. No organic matter. No text overlays. No artistic abstractions.";
 
 // Helper for delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Helper to retry failed requests (e.g. 429 Rate Limit)
+// Helper to retry failed requests
 async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Promise<T> {
   try {
     return await fn();
@@ -24,13 +18,13 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Prom
     if (retries > 0 && (error?.status === 429 || error?.toString().includes('429'))) {
       console.warn(`Gemini 429 Rate Limit. Retrying in ${delayMs}ms...`);
       await delay(delayMs);
-      return retry(fn, retries - 1, delayMs * 2); // Exponential backoff
+      return retry(fn, retries - 1, delayMs * 2); 
     }
     throw error;
   }
 }
 
-// -- EDGE COMPUTING SIMULATION (TIER 1 ANALYSIS) --
+// -- EDGE COMPUTING SIMULATION --
 const calculateZScore = (value: number, history: number[]): number => {
     if (history.length < 5) return 0;
     const mean = history.reduce((a, b) => a + b, 0) / history.length;
@@ -43,24 +37,14 @@ const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string
     if (readings.length < 10) return null;
     const latest = readings[readings.length - 1];
     
-    // 1. Hard Threshold Checks
     if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL: Vibration exceeds safety limits (ISO 10816 Zone D). Immediate shutdown recommended.";
     if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL: Core overheating detected. Fire hazard.";
 
-    // 2. Statistical Anomaly Detection
     const recentVibs = readings.slice(-20).map(r => r.vibration);
     const zScoreVib = calculateZScore(latest.vibration, recentVibs);
     
     if (Math.abs(zScoreVib) > 3.5) {
         return `WARNING: Statistical anomaly detected (Z-Score: ${zScoreVib.toFixed(1)}). Vibration is deviating significantly from the running average.`;
-    }
-
-    // 3. Trend Analysis
-    const recentTemps = readings.slice(-10).map(r => r.temperature);
-    const first = recentTemps[0];
-    const last = recentTemps[recentTemps.length - 1];
-    if (last - first > 5) {
-        return "WARNING: Rapid thermal runaway detected (+5°C delta). Check coolant flow.";
     }
 
     return null;
@@ -76,7 +60,6 @@ export const analyzeMachineHealth = async (
   
   const localInsight = localHeuristicCheck(recentReadings, customThresholds);
   
-  // If Edge layer detects critical failure, return immediately (Speed > AI)
   if (localInsight && localInsight.includes("CRITICAL")) {
       return `[Automated Protection System]: ${localInsight}`;
   }
@@ -85,52 +68,28 @@ export const analyzeMachineHealth = async (
     `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}`
   ).join('\n');
 
-  // Format logs for context
   const logsSummary = recentLogs.length > 0 
     ? recentLogs.slice(0, 5).map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.author} (${l.type}): ${l.content}`).join('\n')
     : "No recent operator notes.";
 
-  const context = customThresholds 
-    ? `
-    - Dynamic Vibration Limit: < ${customThresholds.vibration.toFixed(2)} mm/s
-    - Dynamic Temperature Limit: < ${customThresholds.temperature.toFixed(1)} °C
-    - Dynamic Noise Limit: < ${customThresholds.noise.toFixed(1)} dB
-    `
-    : `
-    - Normal Vibration: < 5.0 mm/s
-    - Normal Temperature: < 80°C
-    - Normal Noise: < 85 dB
-    `;
-
   const prompt = `
     You are an expert industrial reliability engineer AI (Gemini).
     Analyze the machine health by cross-referencing Sensor Telemetry with Operator Observations.
-
     Machine: "${machine.name}" (${machine.type}).
     
-    Context Limits:
-    ${context}
-
-    recent_sensor_telemetry (Last 10 points):
+    Data:
     ${readingsSummary}
     
-    recent_operator_logs (Human Context):
+    Logs:
     ${logsSummary}
     
     ${localInsight ? `Local Algorithm Flag: ${localInsight}` : ''}
 
     Task:
-    1. Compare readings against limits.
-    2. IMPORTANT: Check if operator logs (e.g., "grinding sound", "smell of smoke") correlate with sensor trends. 
-    3. If a human reported an issue and sensors confirm it, escalate the urgency.
+    Analyze patterns. If a failure is detected, identify the SPECIFIC component responsible (e.g. "Inner Race Bearing", "Coolant Pump Impeller", "Axis Lead Screw").
     
-    SAFETY PROTOCOL:
-    - Do NOT recommend overriding safety interlocks.
-    - If specific failure mode is unknown, recommend manual inspection.
-    - Append standard disclaimer: "AI generated insight. Verify before maintenance."
-
     Output:
-    Provide a concise technical assessment (under 100 words). Mention if you used the operator's log in your deduction.
+    Concise technical assessment (under 50 words). Focus on root cause component.
   `;
 
   try {
@@ -145,15 +104,65 @@ export const analyzeMachineHealth = async (
   }
 };
 
-// Structured analysis for alerts
+/**
+ * NEW FEATURE: MULTIMODAL VISION INSPECTION
+ * Allows the operator to upload a photo, and Gemini analyzes it alongside sensor data.
+ * Returns structured JSON with bounding boxes.
+ */
+export const analyzeAttachedImage = async (
+    machineName: string, 
+    base64Image: string, 
+    mimeType: string,
+    currentDiagnosis: string
+) => {
+    const prompt = `
+        You are a Senior Industrial Mechanic. 
+        Context: The machine '${machineName}' is flagging sensor alerts with the diagnosis: "${currentDiagnosis}".
+        
+        Task:
+        Analyze the attached photo of the actual machine component.
+        1. Identify the specific part in the image that corresponds to the diagnosis.
+        2. Verify if visual evidence (rust, leaks, cracks, discoloration, or misalignment) matches the sensor data.
+        
+        Output:
+        Return a JSON object with this schema:
+        {
+            "analysis": "Short direct observation for the operator.",
+            "issueDetected": boolean,
+            "boundingBox": [ymin, xmin, ymax, xmax] // Array of 4 integers (0-1000 scale) outlining the specific defective component. If no specific defect is visible, return null.
+        }
+    `;
+
+    try {
+        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-2.5-flash', 
+            contents: {
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType, data: base64Image } }
+                ]
+            },
+            config: {
+                responseMimeType: "application/json"
+            }
+        }));
+        return JSON.parse(response.text || "{}");
+    } catch (e) {
+        console.error("Vision analysis failed", e);
+        return { analysis: "Visual analysis failed.", issueDetected: false, boundingBox: null };
+    }
+};
+
+// Structured analysis for alerts + REPAIR STEPS
 export const generateMaintenancePlan = async (alertMessage: string, machineContext: string) => {
     const prompt = `
-        Context: Machine ${machineContext} has triggered an alert: "${alertMessage}".
-        Generate a structured JSON response with a diagnosis, recommended action, and urgency level.
+        Context: Machine ${machineContext} has a diagnosed issue: "${alertMessage}".
+        Generate a structured maintenance plan.
         
-        SAFETY RULES:
-        - Recommendation must follow standard LOTO (Lockout/Tagout) procedures.
-        - Urgency must be High if temperature > 100C or Vibration > 10mm/s.
+        Requirements:
+        1. Diagnosis: What is wrong? Be precise (e.g. "Misalignment of Coupler").
+        2. Repair Steps: 3-5 distinct, physical actions. Use imperative verbs (e.g. "Loosen", "Align", "Lubricate"). Mention specific tools in the step description.
+        3. Tooling: List required tools.
     `;
 
     try {
@@ -166,8 +175,13 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
                     type: Type.OBJECT,
                     properties: {
                         diagnosis: { type: Type.STRING },
-                        recommendation: { type: Type.STRING },
-                        urgency: { type: Type.STRING, enum: ["Low", "Medium", "High", "Immediate"] }
+                        urgency: { type: Type.STRING, enum: ["Low", "Medium", "High", "Immediate"] },
+                        repairSteps: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING },
+                          description: "Step-by-step repair instructions including tool usage"
+                        },
+                        requiredTools: { type: Type.STRING }
                     }
                 }
             }
@@ -178,13 +192,76 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
         return JSON.parse(cleanJson);
     } catch (e) {
         console.error("Plan generation failed", e);
-        return { diagnosis: "Unknown Issue", recommendation: "Manual inspection required", urgency: "Medium" };
+        return { diagnosis: "Unknown Issue", repairSteps: ["Inspect manually"], urgency: "Medium" };
     }
 };
 
 /**
- * FEATURE 1: Acoustic Anomaly Detection (Shazam for Machines)
+ * VISUAL SIMULATION ENGINE (ANTI-HALLUCINATION ENHANCED)
  */
+export const generateVisualSimulation = async (
+    machineInfo: string, 
+    context: string, 
+    mode: 'golden_sample' | 'defect_current' | 'repair_step',
+    stepDetail?: string
+): Promise<string | null> => {
+    
+    let prompt = "";
+    const NEGATIVE_PROMPT = "Exclude: people faces, human bodies, animals, biological matter, artistic abstraction, blur, low resolution, text overlays, watermarks, cartoon style.";
+    const STYLE_GUIDE = "Style: Photorealistic Industrial Macro Photography. Lighting: Neutral studio lighting, high contrast, sharp focus on mechanical details. Texture: Metallic, grease, rust, rubber, steel.";
+
+    switch(mode) {
+        case 'golden_sample':
+            prompt = `Reference Image: A brand new, factory-perfect replacement part for a ${machineInfo}. 
+            Component Context: ${context}. 
+            Visuals: Clean metal, perfect alignment, no wear, no dust, no rust. 
+            View: Isometric or top-down engineering view.`;
+            break;
+            
+        case 'defect_current':
+            prompt = `Failure Analysis Image: A close-up of a damaged component on a ${machineInfo}. 
+            Diagnosis: ${context}.
+            Visuals: Depict specific signs of failure such as heat discoloration (blueing), metal shavings, heavy rust, cracking, or severe misalignment. 
+            The image should serve as visual evidence of the breakdown.`;
+            break;
+            
+        case 'repair_step':
+            prompt = `Technical Maintenance Guide: A step-by-step visual instruction for ${machineInfo}.
+            Action: "${stepDetail}".
+            Visuals: Show the specific machine part and the required tool (e.g., wrench, screwdriver, multimeter) in position. 
+            View: Close-up action shot. Clear separation between part and tool.`;
+            break;
+    }
+
+    const finalPrompt = `${prompt} ${INDUSTRIAL_CONTEXT_ENFORCER} ${STYLE_GUIDE} ${NEGATIVE_PROMPT}`;
+
+    try {
+        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [{ text: finalPrompt }]
+            },
+            config: {
+                imageConfig: {
+                    aspectRatio: "16:9", 
+                    numberOfImages: 1
+                }
+            }
+        }));
+
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+                return `data:image/png;base64,${part.inlineData.data}`;
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error("Image generation failed", e);
+        return null;
+    }
+};
+
+// ... existing audio functions ...
 export const analyzeAudioSignature = async (machineType: string, base64Audio: string, mimeType: string = "audio/webm") => {
     const prompt = `
       You are an Acoustic Engineer. Listen to this recording of a ${machineType}.
@@ -229,18 +306,8 @@ export const analyzeAudioSignature = async (machineType: string, base64Audio: st
     }
 };
 
-/**
- * FEATURE 2: Contextual Voice Logbook (Voice-to-Text)
- */
 export const transcribeAudioLog = async (base64Audio: string, mimeType: string = "audio/webm"): Promise<string> => {
-    const prompt = `
-        You are a manufacturing log assistant. 
-        Transcribe the following voice note from an operator accurately. 
-        Remove filler words (um, uh). 
-        Format technical terms correctly (e.g., '500 PSI', 'bearing 2B').
-        Return ONLY the transcribed text.
-    `;
-
+    const prompt = `Transcribe this operator voice log. Remove filler words. Return text only.`;
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -257,90 +324,5 @@ export const transcribeAudioLog = async (base64Audio: string, mimeType: string =
             }
         }));
         return response.text || "";
-    } catch (e) {
-        console.error("Transcription failed", e);
-        return "";
-    }
-};
-
-/**
- * VISUAL SIMULATION ENGINE - UPDATED FOR 5 PAIN POINTS
- */
-export const generateVisualSimulation = async (
-    machineName: string, 
-    issueDescription: string, 
-    mode: 'golden_sample' | 'consequence' | 'loto_overlay' | 'ghost_view' | 'synthetic_training',
-    customPromptOverride?: string
-): Promise<string | null> => {
-    
-    // 1. Safety Guardrail
-    if (customPromptOverride && !validatePromptSafety(customPromptOverride)) {
-        console.warn("Safety Block: Custom prompt contained restricted keywords.");
-        return null; // Fail gracefully
-    }
-
-    let prompt = "";
-
-    // If a specific visual prompt is provided (e.g. from the JSON steps), use it.
-    if (customPromptOverride) {
-        prompt = `Industrial technical illustration: ${customPromptOverride}. High definition, professional context.`;
-    } else {
-        switch(mode) {
-            case 'golden_sample':
-                prompt = `Golden Sample Reference: Photorealistic, high-resolution product photography of a brand new, pristine ${machineName} component related to ${issueDescription}. 
-                Perfect condition, clean metallic surfaces, factory lighting, no wear, no rust, no oil. Use a neutral studio background.`;
-                break;
-                
-            case 'consequence':
-                prompt = `Simulation of Catastrophic Failure: Photorealistic industrial image of a ${machineName} component that has been severely damaged due to neglected ${issueDescription}. 
-                Show extreme wear, seized bearings turned black, heavy rust, structural cracks, metal shavings, and smoke residue. Dramatic warning visualization.`;
-                break;
-                
-            case 'loto_overlay':
-                prompt = `Industrial Safety Visualization: A photo of a ${machineName} panel or piping system. 
-                OVERLAY: Highlight specific isolation valves and electrical breakers in GLOWING RED and GREEN outlines. 
-                Add floating 'LOCKED' tag icons. The image should clearly indicate where to place physical locks for Lockout/Tagout (LOTO). High contrast.`;
-                break;
-                
-            case 'ghost_view':
-                prompt = `Technical 'Ghost View' Illustration: A semi-transparent X-Ray view of a ${machineName} housing related to ${issueDescription}. 
-                Show the external casing as transparent glass/wireframe, revealing the internal mounting bolts, clips, and gears inside. 
-                Engineering blueprint style, blue and white, high technical detail for assembly guidance.`;
-                break;
-                
-            case 'synthetic_training':
-                prompt = `Industrial Training Scenario: A photorealistic simulation of a rare failure mode on a ${machineName}. 
-                Depict: ${issueDescription}. 
-                The image should be realistic enough to train a new operator on what to look for. Detailed textures of leakage, smoke, or misalignment.`;
-                break;
-        }
-    }
-
-    // MANDATORY SAFETY OVERRIDE FOR IMAGEN
-    prompt += ` ${INDUSTRIAL_CONTEXT_ENFORCER} The image must not depict real people injured. Focus purely on mechanical equipment damage.`;
-
-    try {
-        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: {
-                parts: [{ text: prompt }]
-            },
-            config: {
-                imageConfig: {
-                    aspectRatio: "16:9", 
-                    numberOfImages: 1
-                }
-            }
-        }));
-
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData) {
-                return `data:image/png;base64,${part.inlineData.data}`;
-            }
-        }
-        return null;
-    } catch (e) {
-        console.error("Image generation failed", e);
-        return null;
-    }
+    } catch (e) { return ""; }
 };
