@@ -135,17 +135,31 @@ const App = () => {
   }, [machines, searchTerm]);
 
   const stats = useMemo(() => {
+    const total = machines.length;
     const criticalCount = machines.filter(m => m.status === MachineStatus.CRITICAL).length;
+    const warningCount = machines.filter(m => m.status === MachineStatus.WARNING).length;
+    const offlineCount = machines.filter(m => m.status === MachineStatus.OFFLINE).length;
+    
+    // Dynamic Efficiency Calculation
+    // Base 100% - penalty for each issue
+    let calculatedEfficiency = 100;
+    if (total > 0) {
+        const penalty = (criticalCount * 30 + warningCount * 10 + offlineCount * 100) / total;
+        calculatedEfficiency = Math.max(0, 100 - penalty);
+    } else {
+        calculatedEfficiency = 100;
+    }
+
     const totalPower = machines.reduce((acc, m) => {
         const lastReading = m.history[m.history.length - 1];
         return acc + (lastReading?.powerUsage || 0);
     }, 0);
 
     return {
-        total: machines.length,
+        total,
         critical: criticalCount,
         power: Math.round(totalPower),
-        efficiency: 94.2
+        efficiency: calculatedEfficiency.toFixed(1)
     };
   }, [machines]);
 
@@ -163,14 +177,14 @@ const App = () => {
             <div className="text-3xl font-bold text-blue-950 dark:text-white mt-2">
                 {stats.critical}
             </div>
-            <div className={`text-xs mt-2 ${stats.critical > 0 ? 'text-rose-600 dark:text-rose-500' : 'text-gray-500 dark:text-slate-500'}`}>
+            <div className={`text-xs mt-2 ${stats.critical > 0 ? 'text-rose-600 dark:text-rose-500 font-bold animate-pulse' : 'text-gray-500 dark:text-slate-500'}`}>
                 {stats.critical > 0 ? 'Requires Immediate Attention' : 'Systems Nominal'}
             </div>
         </div>
         <div className="bg-white dark:bg-navy-950 border border-gray-200 dark:border-navy-800 rounded-xl p-5 shadow-sm">
-            <h3 className="text-gray-500 dark:text-slate-400 text-sm font-medium">Avg Efficiency</h3>
+            <h3 className="text-gray-500 dark:text-slate-400 text-sm font-medium">Global Efficiency</h3>
             <div className="text-3xl font-bold text-blue-950 dark:text-white mt-2">{stats.efficiency}%</div>
-            <div className="text-gray-500 dark:text-slate-500 text-xs mt-2">Target: 92%</div>
+            <div className="text-gray-500 dark:text-slate-500 text-xs mt-2">Target: 96%</div>
         </div>
             <div className="bg-white dark:bg-navy-950 border border-gray-200 dark:border-navy-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-gray-500 dark:text-slate-400 text-sm font-medium">Power Usage</h3>

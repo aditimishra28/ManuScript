@@ -139,6 +139,7 @@ class ManuscriptAIDatabase extends Dexie {
   }
 
   async upsertMachine(id: string, machine: Machine) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { history, ...machineRecord } = machine;
       await this.machines.put(machineRecord);
   }
