@@ -10,6 +10,12 @@ const INDUSTRIAL_CONTEXT_ENFORCER = "CONTEXT: Industrial manufacturing environme
 // Helper for delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Helper to clean JSON string from Markdown wrapping
+const cleanJson = (text: string): string => {
+    if (!text) return "{}";
+    return text.replace(/```json|```/g, '').trim();
+};
+
 // Helper to retry failed requests
 async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Promise<T> {
   try {
@@ -146,7 +152,9 @@ export const analyzeAttachedImage = async (
                 responseMimeType: "application/json"
             }
         }));
-        return JSON.parse(response.text || "{}");
+        
+        const rawText = response.text || "{}";
+        return JSON.parse(cleanJson(rawText));
     } catch (e) {
         console.error("Vision analysis failed", e);
         return { analysis: "Visual analysis failed.", issueDetected: false, boundingBox: null };
@@ -187,9 +195,8 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
             }
         }));
         
-        const text = response.text || "{}";
-        const cleanJson = text.replace(/```json|```/g, '').trim();
-        return JSON.parse(cleanJson);
+        const rawText = response.text || "{}";
+        return JSON.parse(cleanJson(rawText));
     } catch (e) {
         console.error("Plan generation failed", e);
         return { diagnosis: "Unknown Issue", repairSteps: ["Inspect manually"], urgency: "Medium" };
@@ -295,7 +302,8 @@ export const analyzeAudioSignature = async (machineType: string, base64Audio: st
                 }
             }
         }));
-        return JSON.parse(response.text || "{}");
+        const rawText = response.text || "{}";
+        return JSON.parse(cleanJson(rawText));
     } catch (e) {
         console.error("Audio analysis failed", e);
         return { 

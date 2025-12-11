@@ -146,36 +146,33 @@ class SentinAIDatabase extends Dexie {
    * - Keep RAW data for last 1 hour (HOT)
    * - Aggregate data older than 1 hour into 1-minute buckets (WARM)
    * - Delete data older than 24 hours (COLD/Gone for local demo)
+   * 
+   * FIXED: Uses iterate() instead of toArray() to avoid OOM crashes on large datasets.
    */
   async performDataRollup(emergency = false) {
       const NOW = Date.now();
       const ONE_HOUR = 60 * 60 * 1000;
-      const HOT_CUTOFF = NOW - (emergency ? (10 * 60 * 1000) : ONE_HOUR); // Keep 10 mins in emergency, else 1 hour
+      const HOT_CUTOFF = NOW - (emergency ? (10 * 60 * 1000) : ONE_HOUR); 
       
       try {
-          // 1. Find raw records older than cutoff that haven't been aggregated
-          const oldRawRecords = await this.readings
+          const buckets: Record<string, SensorReadingRecord[]> = {};
+          const idsToDelete: number[] = [];
+          
+          // 1. Iterate instead of Loading All into Memory
+          await this.readings
             .where('timestamp')
             .below(HOT_CUTOFF)
-            .and(r => !r.isAggregated)
-            .toArray();
+            .filter(r => !r.isAggregated) // Only process raw
+            .each(r => {
+                const bucketTime = Math.floor(r.timestamp / 60000) * 60000; 
+                const key = `${r.machineId}_${bucketTime}`;
+                if (!buckets[key]) buckets[key] = [];
+                buckets[key].push(r);
+                if (r.id) idsToDelete.push(r.id);
+            });
 
-          if (oldRawRecords.length === 0) return;
-
-          // 2. Group by machine and 1-minute bucket
-          const buckets: Record<string, SensorReadingRecord[]> = {};
-          
-          oldRawRecords.forEach(r => {
-              // Round down to nearest minute
-              const bucketTime = Math.floor(r.timestamp / 60000) * 60000; 
-              const key = `${r.machineId}_${bucketTime}`;
-              if (!buckets[key]) buckets[key] = [];
-              buckets[key].push(r);
-          });
-
-          // 3. Calculate Averages
+          // 2. Process Buckets (CPU intensive, but RAM safe now)
           const aggregatedRecords: SensorReadingRecord[] = [];
-          const idsToDelete: number[] = [];
 
           Object.values(buckets).forEach(group => {
               if (group.length === 0) return;
@@ -204,20 +201,16 @@ class SentinAIDatabase extends Dexie {
                   powerUsage: avg.powerUsage / count,
                   isAggregated: true
               } as SensorReadingRecord);
+          });
 
-              // Collect IDs of raw data to delete
-              group.forEach(g => {
-                  if (g.id) idsToDelete.push(g.id);
+          // 3. Batch Transaction
+          if (aggregatedRecords.length > 0) {
+              await this.transaction('rw', this.readings, async () => {
+                  await this.readings.bulkDelete(idsToDelete);
+                  await this.readings.bulkAdd(aggregatedRecords);
               });
-          });
-
-          // 4. Batch Transaction: Add Aggregates & Delete Raw
-          await this.transaction('rw', this.readings, async () => {
-              await this.readings.bulkDelete(idsToDelete);
-              await this.readings.bulkAdd(aggregatedRecords);
-          });
-
-          console.log(`Optimization Complete: Compressed ${oldRawRecords.length} raw points into ${aggregatedRecords.length} aggregates.`);
+              console.log(`Optimization Complete: Compressed ${idsToDelete.length} raw points into ${aggregatedRecords.length} aggregates.`);
+          }
 
       } catch (e) {
           console.error("Rollup failed", e);

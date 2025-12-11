@@ -22,7 +22,8 @@ import {
   RefreshCw,
   Camera,
   Upload,
-  Zap
+  Zap,
+  Maximize
 } from 'lucide-react';
 import { 
   analyzeMachineHealth, 
@@ -64,6 +65,10 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const [visionResult, setVisionResult] = useState<VisionResult | null>(null);
   const [isAnalyzingVision, setIsAnalyzingVision] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Ref for calculating exact image dimensions for bounding box
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [imgDims, setImgDims] = useState({ width: 0, height: 0, top: 0, left: 0 });
 
   // -- Acoustic Diagnostic State --
   const [isRecording, setIsRecording] = useState(false);
@@ -77,19 +82,8 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   // -- Logbook & Timeline State --
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [machineAlerts, setMachineAlerts] = useState<Alert[]>([]);
-  const [newLogText, setNewLogText] = useState("");
-  const [isDictating, setIsDictating] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const dictationRecorderRef = useRef<MediaRecorder | null>(null);
-  const dictationChunksRef = useRef<Blob[]>([]);
-
+  
   // Configuration Edit State
-  const [configForm] = useState({
-    modelNumber: machine.modelNumber || '',
-    serialNumber: machine.serialNumber || '',
-    firmwareVersion: machine.firmwareVersion || ''
-  });
-
   const [useDynamicThresholds, setUseDynamicThresholds] = useState(false);
   
   const historicalStats = useMemo(() => {
@@ -134,15 +128,6 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   useEffect(() => {
     loadData();
   }, [machine.id]);
-
-  // Compute Unified Timeline
-  const unifiedTimeline = useMemo(() => {
-    const mixed = [
-        ...logs.map(l => ({ ...l, entryType: 'LOG' })),
-        ...machineAlerts.map(a => ({ ...a, entryType: 'ALERT', author: 'System', content: a.message }))
-    ];
-    return mixed.sort((a, b) => b.timestamp - a.timestamp);
-  }, [logs, machineAlerts]);
 
   // Calculate Health Score
   const healthScore = useMemo(() => {
@@ -224,6 +209,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
           const base64String = (reader.result as string).split(',')[1];
           const fullDataUrl = reader.result as string;
           setUserImage(fullDataUrl);
+          setVisionResult(null); // Reset previous result
           
           if (structuredPlan?.diagnosis) {
               setIsAnalyzingVision(true);
@@ -239,6 +225,44 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
       };
       reader.readAsDataURL(file);
   };
+
+  // Helper to get image coordinates relative to the rendered size (handling object-contain)
+  const handleImageLoad = () => {
+      if (imgRef.current) {
+          const { clientWidth, clientHeight, naturalWidth, naturalHeight } = imgRef.current;
+          // Calculate the aspect ratios
+          const containerRatio = clientWidth / clientHeight;
+          const imageRatio = naturalWidth / naturalHeight;
+
+          let renderWidth, renderHeight, top, left;
+
+          if (imageRatio > containerRatio) {
+              // Image is wider than container (constrained by width)
+              renderWidth = clientWidth;
+              renderHeight = clientWidth / imageRatio;
+              top = (clientHeight - renderHeight) / 2;
+              left = 0;
+          } else {
+              // Image is taller than container (constrained by height)
+              renderHeight = clientHeight;
+              renderWidth = clientHeight * imageRatio;
+              left = (clientWidth - renderWidth) / 2;
+              top = 0;
+          }
+
+          setImgDims({ width: renderWidth, height: renderHeight, top, left });
+      }
+  };
+
+  // Resize observer to update box if window resizes
+  useEffect(() => {
+    const handleResize = () => {
+        if (imgRef.current) handleImageLoad();
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [userImage]);
+
 
   // ... (Audio Logic) ...
   const getSupportedMimeType = () => {
@@ -351,23 +375,31 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         </div>
                     </div>
 
-                    <div className="flex-1 bg-black rounded-lg border border-slate-800 relative min-h-[250px] flex items-center justify-center overflow-hidden">
+                    <div className="flex-1 bg-black rounded-lg border border-slate-800 relative min-h-[300px] flex items-center justify-center overflow-hidden">
                         {userImage ? (
-                            <div className="relative w-full h-full">
-                                <img src={userImage} alt="User Upload" className="w-full h-full object-contain" />
-                                {/* Bounding Box Overlay */}
-                                {visionResult?.boundingBox && (
+                            <div className="relative w-full h-full flex items-center justify-center">
+                                {/* Use object-contain but allow measuring */}
+                                <img 
+                                    ref={imgRef}
+                                    src={userImage} 
+                                    alt="User Upload" 
+                                    className="w-full h-full object-contain max-h-[400px]" 
+                                    onLoad={handleImageLoad}
+                                />
+                                
+                                {/* Bounding Box Overlay - Positioned exactly over the rendered image pixels */}
+                                {visionResult?.boundingBox && imgDims.width > 0 && (
                                     <div 
-                                        className="absolute border-2 border-rose-500 bg-rose-500/20 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.5)]"
+                                        className="absolute border-2 border-rose-500 bg-rose-500/10 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.5)] z-20"
                                         style={{
-                                            top: `${visionResult.boundingBox[0] / 10}%`,
-                                            left: `${visionResult.boundingBox[1] / 10}%`,
-                                            height: `${(visionResult.boundingBox[2] - visionResult.boundingBox[0]) / 10}%`,
-                                            width: `${(visionResult.boundingBox[3] - visionResult.boundingBox[1]) / 10}%`
+                                            top: imgDims.top + (visionResult.boundingBox[0] / 1000) * imgDims.height,
+                                            left: imgDims.left + (visionResult.boundingBox[1] / 1000) * imgDims.width,
+                                            height: ((visionResult.boundingBox[2] - visionResult.boundingBox[0]) / 1000) * imgDims.height,
+                                            width: ((visionResult.boundingBox[3] - visionResult.boundingBox[1]) / 1000) * imgDims.width
                                         }}
                                     >
-                                        <div className="absolute -top-6 left-0 bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow">
-                                            DEFECT LOCATED
+                                        <div className="absolute -top-7 left-0 bg-rose-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg whitespace-nowrap flex items-center gap-1">
+                                            <AlertTriangle className="w-3 h-3" /> DEFECT SOURCE
                                         </div>
                                     </div>
                                 )}
@@ -380,7 +412,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         )}
                         
                         {isAnalyzingVision && (
-                            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-10">
+                            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center z-30">
                                 <Loader2 className="w-10 h-10 text-indigo-500 animate-spin mb-3" />
                                 <span className="text-sm text-indigo-300 font-bold tracking-wide">Analysing Spatial Data...</span>
                             </div>
