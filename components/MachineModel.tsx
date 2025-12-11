@@ -1,72 +1,97 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Machine, MachineStatus, SensorReading } from '../types';
+import { Machine, MachineStatus, SensorReading, LogEntry, Alert } from '../types';
 import { LiveCharts } from './LiveCharts';
+import { db } from '../services/db';
+import { SecurityContext } from '../services/securityLayer';
 import { 
   BrainCircuit, 
   AlertTriangle, 
   CheckCircle, 
   Thermometer, 
   Activity, 
-  Volume2, 
-  Video,
   Settings,
   MonitorPlay,
   ClipboardList,
   Cpu,
-  Edit,
-  Save,
-  X,
-  Scan,
-  Eye,
-  ImageIcon,
-  Flame,
-  FileText,
   Sparkles,
-  Wifi,
-  Wrench,
-  PackageSearch
+  AlertOctagon,
+  Mic,
+  Square,
+  AudioWaveform,
+  User,
+  Loader2,
+  BellRing,
+  Layers,
+  History,
+  Lock,
+  GraduationCap
 } from 'lucide-react';
-import { analyzeMachineHealth, generateMaintenancePlan, generateVisualSimulation } from '../services/geminiService';
+import { 
+  analyzeMachineHealth, 
+  generateMaintenancePlan, 
+  generateVisualSimulation, 
+  analyzeAudioSignature,
+  transcribeAudioLog
+} from '../services/geminiService';
 
 interface MachineModelProps {
   machine: Machine;
   onClose: () => void;
 }
 
-type Tab = 'live' | 'config' | 'history';
-type SimulationMode = 'none' | 'failure' | 'thermal' | 'diagram' | 'part_detail' | 'repair_step';
+type Tab = 'live' | 'config' | 'logbook' | 'history';
+type GenLabMode = 'overview' | 'golden_sample' | 'consequence_sim' | 'loto_overlay' | 'ghost_view' | 'synthetic_training';
 
 const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const [activeTab, setActiveTab] = useState<Tab>('live');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [structuredPlan, setStructuredPlan] = useState<any>(null);
+  const user = SecurityContext.getUser();
   
-  // Image Generation State
-  const [simulatedImage, setSimulatedImage] = useState<string | null>(null);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [simulationMode, setSimulationMode] = useState<SimulationMode>('none');
-  const [manualSimulationPrompt, setManualSimulationPrompt] = useState("Cracked shaft coupling");
+  // -- Generative Lab State --
+  const [labMode, setLabMode] = useState<GenLabMode>('overview');
+  const [labLoading, setLabLoading] = useState(false);
+  const [manualPrompt, setManualPrompt] = useState("Vibration anomaly in bearing housing");
+
+  // Pain Point Images
+  const [goldenImage, setGoldenImage] = useState<string | null>(null);
+  const [consequenceImage, setConsequenceImage] = useState<string | null>(null);
+  const [lotoImage, setLotoImage] = useState<string | null>(null);
+  const [ghostImage, setGhostImage] = useState<string | null>(null);
+  const [trainingImage, setTrainingImage] = useState<string | null>(null);
+  const [trainingScenario, setTrainingScenario] = useState("Hydraulic fluid leakage");
+
+  // -- Acoustic Diagnostic State --
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioAnalysis, setAudioAnalysis] = useState<any>(null);
+  const [isAnalysingAudio, setIsAnalysingAudio] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number | null>(null);
+
+  // -- Logbook & Timeline State --
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [machineAlerts, setMachineAlerts] = useState<Alert[]>([]);
+  const [newLogText, setNewLogText] = useState("");
+  const [isDictating, setIsDictating] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const dictationRecorderRef = useRef<MediaRecorder | null>(null);
+  const dictationChunksRef = useRef<Blob[]>([]);
 
   // Configuration Edit State
-  const [isEditing, setIsEditing] = useState(false);
   const [configForm, setConfigForm] = useState({
     modelNumber: machine.modelNumber || '',
     serialNumber: machine.serialNumber || '',
-    powerRating: machine.powerRating?.toString() || '',
-    maxRpm: machine.maxRpm?.toString() || '',
-    firmwareVersion: machine.firmwareVersion || '',
-    networkIp: machine.networkIp || ''
+    firmwareVersion: machine.firmwareVersion || ''
   });
-  const [errors, setErrors] = useState<Record<string, string>>({});
 
   // Dynamic Thresholds State
   const [useDynamicThresholds, setUseDynamicThresholds] = useState(false);
   
-  // Calculate dynamic thresholds based on history (Mean + 2 StdDev)
   const historicalStats = useMemo(() => {
     if (machine.history.length < 5) return null;
-    
     const calculateStat = (key: keyof SensorReading) => {
         const values = machine.history.map(h => h[key]);
         const mean = values.reduce((a, b) => a + b, 0) / values.length;
@@ -74,7 +99,6 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
         const stdDev = Math.sqrt(variance);
         return { mean, stdDev, limit: mean + (2 * stdDev) };
     };
-
     return {
         vibration: calculateStat('vibration'),
         temperature: calculateStat('temperature'),
@@ -82,102 +106,274 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
     };
   }, [machine.history]);
 
-  // AR Inspection State (Formerly "Camera")
-  const [isARInspectionMode, setIsARInspectionMode] = useState(false);
-  const [isCameraLoading, setIsCameraLoading] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  // Manage Camera Stream only for AR Inspection
+  // -- COMPONENT LIFECYCLE CLEANUP (MEMORY LEAK FIX) --
   useEffect(() => {
-    let stream: MediaStream | null = null;
-    let isMounted = true;
+    return () => {
+        // Aggressively stop media streams and animation frames on unmount
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop();
+        }
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+        }
+        // Stop all tracks in the stream to turn off the microphone light
+        if (mediaRecorderRef.current && mediaRecorderRef.current.stream) {
+            mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        }
+    };
+  }, []);
 
-    if (isARInspectionMode) {
-      setCameraError(null); 
-      const startCamera = async () => {
-        try {
-          setIsCameraLoading(true);
-          // Default to environment facing camera if available (it's an inspection tool)
-          const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 } }
-          });
-          
-          if (!isMounted) {
-            mediaStream.getTracks().forEach(track => track.stop());
-            return;
-          }
+  // Fetch Data
+  const loadData = async () => {
+    const l = await db.getMachineLogs(machine.id);
+    setLogs(l);
+    
+    // Fetch local alerts for this machine
+    const a = await db.alerts.where('machineId').equals(machine.id).reverse().sortBy('timestamp');
+    setMachineAlerts(a);
+  };
 
-          stream = mediaStream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-          }
-          setIsCameraLoading(false);
-        } catch (err: any) {
-          if (!isMounted) return;
-          console.error("Error accessing camera:", err);
-          
-          let errorMessage = "Camera access unavailable.";
-          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-              errorMessage = "Permission denied. Please enable camera access in browser settings.";
-          } else if (err.name === 'NotFoundError') {
-              errorMessage = "No camera device found.";
-          } else if (err.name === 'NotReadableError') {
-              errorMessage = "Camera is currently in use by another application.";
-          }
-          
-          setCameraError(errorMessage);
-          setIsCameraLoading(false);
+  useEffect(() => {
+    loadData();
+  }, [machine.id]);
+
+  // Compute Unified Timeline (Merge Logs & Alerts)
+  const unifiedTimeline = useMemo(() => {
+    const mixed = [
+        ...logs.map(l => ({ ...l, entryType: 'LOG' })),
+        ...machineAlerts.map(a => ({ ...a, entryType: 'ALERT', author: 'System', content: a.message }))
+    ];
+    // Sort descending
+    return mixed.sort((a, b) => b.timestamp - a.timestamp);
+  }, [logs, machineAlerts]);
+
+  // Calculate Health Score (0-100)
+  const healthScore = useMemo(() => {
+      let score = 100;
+      if (machine.status === MachineStatus.WARNING) score -= 20;
+      if (machine.status === MachineStatus.CRITICAL) score -= 50;
+      
+      // Deduct for recent alerts
+      const recentAlerts = machineAlerts.filter(a => Date.now() - a.timestamp < 24 * 60 * 60 * 1000);
+      score -= (recentAlerts.length * 5);
+      
+      // Deduct for high vibes
+      const lastReading = machine.history[machine.history.length - 1];
+      if (lastReading && lastReading.vibration > 5) score -= 10;
+      
+      return Math.max(0, score);
+  }, [machine.status, machineAlerts, machine.history]);
+
+  const handleAddLog = async () => {
+    if (!newLogText.trim()) return;
+    const entry: LogEntry = {
+      machineId: machine.id,
+      timestamp: Date.now(),
+      author: user.name,
+      content: newLogText,
+      type: 'human'
+    };
+    await db.addLogEntry(entry);
+    setNewLogText("");
+    loadData();
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, _) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        // Remove data url prefix
+        resolve(result.split(',')[1]);
+      };
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  // Helper to get supported mime type
+  const getSupportedMimeType = () => {
+    if (MediaRecorder.isTypeSupported('audio/webm')) return 'audio/webm';
+    if (MediaRecorder.isTypeSupported('audio/mp4')) return 'audio/mp4';
+    return ''; // fallback
+  };
+
+  // -- SHAZAM FOR MACHINES (Acoustic Analysis) --
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getSupportedMimeType();
+      const options = mimeType ? { mimeType } : undefined;
+      const mediaRecorder = new MediaRecorder(stream, options);
+      
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      // Visualize Audio
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      const draw = () => {
+        if (!canvasRef.current) return;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        animationFrameRef.current = requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(dataArray);
+
+        ctx.fillStyle = '#0f172a'; // Clear
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const barWidth = (canvas.width / bufferLength) * 2.5;
+        let barHeight;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+          barHeight = dataArray[i] / 2;
+          ctx.fillStyle = `rgb(${barHeight + 100}, 99, 241)`; // Indigo color scale
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+          x += barWidth + 1;
         }
       };
-      startCamera();
-    } 
+      draw();
 
-    return () => {
-      isMounted = false;
-      if (stream) {
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
         stream.getTracks().forEach(track => track.stop());
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-    };
-  }, [isARInspectionMode]);
+        
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/webm' });
+        await handleAudioAnalysis(audioBlob, mimeType || 'audio/webm');
+      };
 
-  // Reset form when machine changes
-  useEffect(() => {
-    if (!isEditing) {
-        setConfigForm({
-            modelNumber: machine.modelNumber || '',
-            serialNumber: machine.serialNumber || '',
-            powerRating: machine.powerRating?.toString() || '',
-            maxRpm: machine.maxRpm?.toString() || '',
-            firmwareVersion: machine.firmwareVersion || '',
-            networkIp: machine.networkIp || ''
-        });
-        setErrors({});
+      mediaRecorder.start();
+      setIsRecording(true);
+      setAudioAnalysis(null);
+
+      // Auto stop after 5 seconds for analysis
+      setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          stopRecording();
+        }
+      }, 5000);
+
+    } catch (err) {
+      console.error("Mic Error:", err);
+      alert("Microphone access denied. Please allow microphone permissions.");
     }
-  }, [machine, isEditing]);
+  };
 
-  const latestReading = machine.history[machine.history.length - 1];
+  const stopRecording = () => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const handleAudioAnalysis = async (blob: Blob, mimeType: string) => {
+    setIsAnalysingAudio(true);
+    try {
+        const base64 = await blobToBase64(blob);
+        const result = await analyzeAudioSignature(machine.type, base64, mimeType);
+        setAudioAnalysis(result);
+        
+        // Save to log
+        if (result && result.classification) {
+            const entry: LogEntry = {
+                machineId: machine.id,
+                timestamp: Date.now(),
+                author: "Gemini Audio Core",
+                content: `Acoustic Scan detected: ${result.classification} (${result.confidence})`,
+                type: 'audio_analysis',
+                meta: result
+            };
+            await db.addLogEntry(entry);
+            loadData();
+        }
+    } catch (e) {
+        console.error(e);
+    }
+    setIsAnalysingAudio(false);
+  };
+
+  // -- VOICE DICTATION FOR LOGBOOK --
+  const startDictation = async () => {
+      try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const mimeType = getSupportedMimeType();
+          const options = mimeType ? { mimeType } : undefined;
+          const mediaRecorder = new MediaRecorder(stream, options);
+
+          dictationRecorderRef.current = mediaRecorder;
+          dictationChunksRef.current = [];
+
+          mediaRecorder.ondataavailable = (e) => {
+              if (e.data.size > 0) dictationChunksRef.current.push(e.data);
+          };
+
+          mediaRecorder.onstop = async () => {
+              stream.getTracks().forEach(track => track.stop());
+              setIsTranscribing(true);
+              const audioBlob = new Blob(dictationChunksRef.current, { type: mimeType || 'audio/webm' });
+              const base64 = await blobToBase64(audioBlob);
+              const text = await transcribeAudioLog(base64, mimeType || 'audio/webm');
+              
+              if (text) {
+                  setNewLogText(prev => prev + (prev ? " " : "") + text.trim());
+              }
+              setIsTranscribing(false);
+          };
+
+          mediaRecorder.start();
+          setIsDictating(true);
+
+      } catch (e) {
+          console.error("Dictation Error", e);
+          alert("Could not access microphone for dictation.");
+      }
+  };
+
+  const stopDictation = () => {
+      if (dictationRecorderRef.current) {
+          dictationRecorderRef.current.stop();
+          setIsDictating(false);
+      }
+  };
 
   const handleRunDiagnostics = async () => {
     setIsAnalyzing(true);
     setAiInsight(null);
     setStructuredPlan(null);
     
+    // Reset Gen Lab
+    setLabMode('overview');
+    setGoldenImage(null);
+    setConsequenceImage(null);
+    setLotoImage(null);
+    setGhostImage(null);
+    setTrainingImage(null);
+
     const thresholds = useDynamicThresholds && historicalStats ? {
         vibration: historicalStats.vibration.limit,
         temperature: historicalStats.temperature.limit,
         noise: historicalStats.noise.limit
     } : undefined;
 
-    // Use local heuristics FIRST, then call Gemini if needed
     setTimeout(async () => {
-        const result = await analyzeMachineHealth(machine, machine.history, thresholds);
+        // PASSED LOGS TO AI HERE -> Context Awareness
+        const result = await analyzeMachineHealth(machine, machine.history, logs, thresholds);
         setAiInsight(result);
         
-        // If critical, get a plan
         if (machine.status === MachineStatus.CRITICAL || machine.status === MachineStatus.WARNING) {
             const plan = await generateMaintenancePlan("Abnormal sensor readings detected", machine.name);
             setStructuredPlan(plan);
@@ -186,352 +382,337 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
     }, 100); 
   };
   
-  const handleGenerateImage = async (mode: SimulationMode) => {
-      if (mode === 'none') return;
+  // -- GEN LAB HANDLERS --
 
-      // Use the diagnosed issue OR the manual prompt if no issue is detected
-      const issue = structuredPlan?.diagnosis || manualSimulationPrompt;
-      
-      setIsGeneratingImage(true);
-      setSimulationMode(mode);
-      setSimulatedImage(null);
-      
-      const img = await generateVisualSimulation(
-          machine.type, 
-          issue, 
-          mode
-      );
-      
-      setSimulatedImage(img);
-      setIsGeneratingImage(false);
+  const getIssueContext = () => structuredPlan?.diagnosis || manualPrompt;
+
+  const handleGoldenSample = async () => {
+      setLabMode('golden_sample');
+      if (!goldenImage) {
+          setLabLoading(true);
+          const img = await generateVisualSimulation(machine.type, getIssueContext(), 'golden_sample');
+          setGoldenImage(img);
+          setLabLoading(false);
+      }
   };
 
-  const validateAndSaveConfig = () => {
-    setIsEditing(false);
-    // In real app, save to backend
+  const handleConsequenceSim = async () => {
+      setLabMode('consequence_sim');
+      if (!consequenceImage) {
+          setLabLoading(true);
+          const img = await generateVisualSimulation(machine.type, getIssueContext(), 'consequence');
+          setConsequenceImage(img);
+          setLabLoading(false);
+      }
   };
 
-  const handleInputChange = (field: string, value: string) => {
-      setConfigForm(prev => ({...prev, [field]: value}));
+  const handleLotoOverlay = async () => {
+      setLabMode('loto_overlay');
+      if (!lotoImage) {
+          setLabLoading(true);
+          const img = await generateVisualSimulation(machine.type, getIssueContext(), 'loto_overlay');
+          setLotoImage(img);
+          setLabLoading(false);
+      }
   };
 
-  const renderLiveMonitor = () => (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full overflow-y-auto pr-2">
-       {/* Left Column: Stats & Digital Twin */}
-       <div className="space-y-6">
-            
-            {/* Visual Feed Container */}
-            <div className="bg-black rounded-lg border border-slate-700 overflow-hidden relative group shadow-lg min-h-[250px]">
-              
-              {/* Header Overlay */}
-              <div className="absolute top-2 left-2 z-20 flex gap-2">
-                 <div className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 font-bold ${isARInspectionMode ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-600'}`}>
-                    {isARInspectionMode ? <Scan className="w-3 h-3" /> : <Wifi className="w-3 h-3" />}
-                    {isARInspectionMode ? 'AR INSPECTION' : 'DIGITAL TWIN'}
-                 </div>
-              </div>
-              
-              <div className="absolute top-2 right-2 z-20">
-                <button 
-                  onClick={() => setIsARInspectionMode(!isARInspectionMode)}
-                  className={`text-[10px] px-2 py-1 rounded border transition-colors flex items-center gap-1 backdrop-blur-sm h-[26px] ${
-                      isARInspectionMode 
-                      ? 'bg-rose-900/80 border-rose-600 text-rose-100 hover:bg-rose-800' 
-                      : 'bg-indigo-900/80 border-indigo-500 text-indigo-100 hover:bg-indigo-800'
-                  }`}
-                >
-                  {isARInspectionMode ? <X className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                  {isARInspectionMode ? "Exit Inspection" : "Start AR Inspection"}
-                </button>
-              </div>
+  const handleGhostView = async () => {
+      setLabMode('ghost_view');
+      if (!ghostImage) {
+          setLabLoading(true);
+          const img = await generateVisualSimulation(machine.type, getIssueContext(), 'ghost_view');
+          setGhostImage(img);
+          setLabLoading(false);
+      }
+  };
 
-              {/* Viewport Content */}
-              {isARInspectionMode ? (
-                <>
-                    {isCameraLoading && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-slate-900 z-10">
-                            <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                        </div>
-                    )}
-                    {cameraError ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 p-6 text-center z-20">
-                            <AlertTriangle className="w-8 h-8 text-rose-500 mb-2" />
-                            <p className="text-xs text-slate-400 mb-4">{cameraError}</p>
-                            <button 
-                                onClick={() => setIsARInspectionMode(false)}
-                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-xs text-white transition-colors"
-                            >
-                                Return to Digital Twin
-                            </button>
-                        </div>
-                    ) : (
-                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-64 object-cover" />
-                    )}
-                    {/* AR Overlay - Only in AR Mode */}
-                    {!cameraError && (
-                        <div className="absolute inset-0 border-2 border-indigo-500/30 m-4 rounded pointer-events-none overflow-hidden">
-                             {/* Scanning Line Animation */}
-                            <div className="absolute top-0 left-0 w-full h-1 bg-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.5)] animate-[scan_3s_ease-in-out_infinite]"></div>
-                            
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 border-2 border-white/30 rounded-lg flex items-center justify-center">
-                                <div className="w-1 h-1 bg-white rounded-full"></div>
-                            </div>
-                            <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur px-2 py-1 text-[10px] text-white flex items-center gap-2 border-l-2 border-indigo-500">
-                                <Scan className="w-3 h-3 text-indigo-400 animate-pulse" />
-                                <span>Target Locked: {machine.type} (99%)</span>
-                            </div>
-                        </div>
-                    )}
-                    <style>{`
-                        @keyframes scan {
-                            0% { top: 0%; opacity: 0; }
-                            10% { opacity: 1; }
-                            90% { opacity: 1; }
-                            100% { top: 100%; opacity: 0; }
-                        }
-                    `}</style>
-                </>
-              ) : (
-                <>
-                    <img 
-                        src={machine.imageUrl} 
-                        alt="Machine Twin" 
-                        className="w-full h-64 object-cover opacity-60"
-                    />
-                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                         <div className="w-24 h-24 border border-indigo-500/20 rounded-full flex items-center justify-center animate-pulse">
-                             <div className="w-20 h-20 border border-indigo-500/40 rounded-full"></div>
-                         </div>
-                         <div className="mt-4 bg-slate-900/80 px-3 py-1 rounded text-xs text-indigo-300 border border-indigo-500/30">
-                            Receiving Telemetry
-                         </div>
-                    </div>
-                </>
-              )}
-            </div>
+  const handleSyntheticTraining = async () => {
+      setLabMode('synthetic_training');
+      setLabLoading(true);
+      const img = await generateVisualSimulation(machine.type, trainingScenario, 'synthetic_training');
+      setTrainingImage(img);
+      setLabLoading(false);
+  };
 
-            {/* Current Metrics Cards */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                 <div className="flex items-center gap-2 text-slate-400 mb-2">
-                    <Activity className="w-4 h-4" /> Vibration
-                 </div>
-                 <div className="text-2xl font-mono text-white">{latestReading?.vibration.toFixed(2)} <span className="text-sm text-slate-500">mm/s</span></div>
-              </div>
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                 <div className="flex items-center gap-2 text-slate-400 mb-2">
-                    <Thermometer className="w-4 h-4" /> Temp
-                 </div>
-                 <div className="text-2xl font-mono text-white">{latestReading?.temperature.toFixed(1)} <span className="text-sm text-slate-500">°C</span></div>
-              </div>
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                 <div className="flex items-center gap-2 text-slate-400 mb-2">
-                    <Volume2 className="w-4 h-4" /> Noise
-                 </div>
-                 <div className="text-2xl font-mono text-white">{latestReading?.noise.toFixed(1)} <span className="text-sm text-slate-500">dB</span></div>
-              </div>
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                 <div className="flex items-center gap-2 text-slate-400 mb-2">
-                    <Activity className="w-4 h-4" /> RPM
-                 </div>
-                 <div className="text-2xl font-mono text-white">{Math.round(latestReading?.rpm)} <span className="text-sm text-slate-500">rev/m</span></div>
-              </div>
-            </div>
 
-          </div>
+  // -- RENDERERS --
 
-          {/* Middle Column: Live Charts */}
-          <div className="lg:col-span-1 space-y-4 flex flex-col">
-            <LiveCharts 
-                data={machine.history} 
-                dataKey="vibration" 
-                color="#f59e0b" 
-                label="Vibration Analysis" 
-                unit="mm/s"
-                threshold={useDynamicThresholds && historicalStats ? historicalStats.vibration.limit : 6.0} 
-            />
-            <LiveCharts 
-                data={machine.history} 
-                dataKey="temperature" 
-                color="#f43f5e" 
-                label="Thermal Sensor" 
-                unit="°C" 
-                threshold={useDynamicThresholds && historicalStats ? historicalStats.temperature.limit : 85}
-            />
-            <LiveCharts 
-                data={machine.history} 
-                dataKey="noise" 
-                color="#3b82f6" 
-                label="Acoustic Emissions" 
-                unit="dB" 
-                threshold={useDynamicThresholds && historicalStats ? historicalStats.noise.limit : 90}
-            />
-          </div>
-
-          {/* Right Column: AI Diagnostics & Visual Lab */}
-          <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-6 flex flex-col">
-            <div className="flex items-center gap-3 mb-6">
-                <div className="p-2 bg-indigo-500/20 rounded-lg">
-                    <BrainCircuit className="w-6 h-6 text-indigo-400" />
+  const renderGenLab = () => {
+      if (labLoading) {
+          return (
+            <div className="h-64 bg-black/30 rounded-xl border border-indigo-500/30 flex flex-col items-center justify-center gap-4 animate-pulse">
+                <div className="relative">
+                    <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                    <Sparkles className="w-6 h-6 text-indigo-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                 </div>
-                <h3 className="text-lg font-semibold text-white">Gemini Predictive Core</h3>
+                <div className="text-center">
+                    <h4 className="text-indigo-300 font-medium">Processing Industrial Physics...</h4>
+                    <p className="text-slate-500 text-xs mt-1">Generating technical visualization</p>
+                </div>
+            </div>
+          );
+      }
+
+      if (labMode === 'golden_sample') {
+          return (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+                  <div className="flex justify-between items-center mb-2">
+                      <h4 className="text-indigo-400 font-bold flex items-center gap-2">
+                          <CheckCircle className="w-4 h-4" /> Golden Sample Comparator
+                      </h4>
+                      <button onClick={() => setLabMode('overview')} className="text-xs text-slate-500 hover:text-white">Back</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 h-64">
+                      <div className="relative bg-slate-800 rounded-xl border border-slate-700 overflow-hidden group">
+                          <img src={machine.imageUrl} className="w-full h-full object-cover opacity-60 grayscale group-hover:grayscale-0 transition-all" />
+                          <div className="absolute top-2 left-2 bg-slate-900/80 px-2 py-1 rounded text-xs text-slate-300 font-mono">CURRENT STATE</div>
+                      </div>
+                      <div className="relative bg-slate-950 rounded-xl border border-indigo-500/50 overflow-hidden shadow-[0_0_15px_rgba(99,102,241,0.1)]">
+                         {goldenImage ? (
+                            <>
+                                <img src={goldenImage} className="w-full h-full object-cover" />
+                                <div className="absolute top-2 left-2 bg-emerald-500/90 text-black px-2 py-1 rounded text-xs font-bold">GOLDEN SAMPLE</div>
+                            </>
+                         ) : <div className="h-full flex items-center justify-center text-slate-500">Failed</div>}
+                      </div>
+                  </div>
+                  <p className="text-xs text-slate-400 text-center">
+                      Use the "Golden Sample" to visually verify if the current wear level exceeds manufacture tolerances.
+                  </p>
+              </div>
+          );
+      }
+
+      if (labMode === 'consequence_sim') {
+          return (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+                  <div className="flex justify-between items-center mb-2">
+                      <h4 className="text-amber-500 font-bold flex items-center gap-2">
+                          <History className="w-4 h-4" /> Future Consequence Simulator
+                      </h4>
+                      <button onClick={() => setLabMode('overview')} className="text-xs text-slate-500 hover:text-white">Back</button>
+                  </div>
+                  <div className="bg-slate-950 rounded-xl border border-amber-900 overflow-hidden relative">
+                       {consequenceImage ? (
+                          <>
+                            <img src={consequenceImage} alt="Consequence" className="w-full h-64 object-cover" />
+                            <div className="absolute top-4 right-4 bg-amber-500 text-black px-3 py-1 rounded text-xs font-bold shadow-lg animate-pulse">
+                                +48 HOURS (PREDICTED)
+                            </div>
+                            <div className="absolute bottom-0 w-full bg-black/80 backdrop-blur p-4 border-t border-amber-900/50">
+                                <p className="text-xs text-amber-200">
+                                    <span className="font-bold block mb-1">CATASTROPHIC FAILURE IMMINENT</span>
+                                    Visualization of component failure if vibration alerts are ignored. Note the structural cracking and heat discoloration.
+                                </p>
+                            </div>
+                          </>
+                       ) : <div className="h-64 bg-slate-800 flex items-center justify-center">Generation Failed</div>}
+                  </div>
+              </div>
+          );
+      }
+
+      if (labMode === 'loto_overlay') {
+          return (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+                  <div className="flex justify-between items-center mb-2">
+                      <h4 className="text-rose-500 font-bold flex items-center gap-2">
+                          <Lock className="w-4 h-4" /> Visual LOTO Overlay
+                      </h4>
+                      <button onClick={() => setLabMode('overview')} className="text-xs text-slate-500 hover:text-white">Back</button>
+                  </div>
+                  <div className="bg-slate-950 rounded-xl border border-rose-900 overflow-hidden relative">
+                       {lotoImage ? (
+                          <>
+                            <img src={lotoImage} alt="LOTO" className="w-full h-64 object-cover" />
+                            <div className="absolute top-4 left-4 bg-rose-600 text-white px-3 py-1 rounded text-xs font-bold shadow-lg flex items-center gap-2">
+                                <Lock className="w-3 h-3" /> SAFETY ISOLATION POINTS
+                            </div>
+                            <div className="absolute bottom-0 w-full bg-black/80 backdrop-blur p-4 border-t border-rose-900/50">
+                                <p className="text-xs text-rose-200">
+                                    Apply physical locks to the highlighted valves and breakers before proceeding.
+                                </p>
+                            </div>
+                          </>
+                       ) : <div className="h-64 bg-slate-800 flex items-center justify-center">Generation Failed</div>}
+                  </div>
+              </div>
+          );
+      }
+
+      if (labMode === 'ghost_view') {
+          return (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+                  <div className="flex justify-between items-center mb-2">
+                      <h4 className="text-blue-400 font-bold flex items-center gap-2">
+                          <Layers className="w-4 h-4" /> Ghost View Assembly Guide
+                      </h4>
+                      <button onClick={() => setLabMode('overview')} className="text-xs text-slate-500 hover:text-white">Back</button>
+                  </div>
+                  <div className="bg-slate-950 rounded-xl border border-blue-900 overflow-hidden relative">
+                       {ghostImage ? (
+                          <>
+                            <img src={ghostImage} alt="Ghost View" className="w-full h-64 object-cover" />
+                            <div className="absolute top-4 right-4 bg-blue-500/20 text-blue-300 border border-blue-500/50 px-3 py-1 rounded text-xs font-bold backdrop-blur">
+                                X-RAY MODE: ON
+                            </div>
+                            <div className="absolute bottom-0 w-full bg-black/80 backdrop-blur p-4 border-t border-blue-900/50">
+                                <p className="text-xs text-blue-200">
+                                    Internal mounting points revealed. Locate the hidden clips highlighted in white before applying torque.
+                                </p>
+                            </div>
+                          </>
+                       ) : <div className="h-64 bg-slate-800 flex items-center justify-center">Generation Failed</div>}
+                  </div>
+              </div>
+          );
+      }
+
+      if (labMode === 'synthetic_training') {
+          return (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
+                  <div className="flex justify-between items-center mb-2">
+                      <h4 className="text-emerald-400 font-bold flex items-center gap-2">
+                          <GraduationCap className="w-4 h-4" /> Synthetic Training Dojo
+                      </h4>
+                      <button onClick={() => setLabMode('overview')} className="text-xs text-slate-500 hover:text-white">Back</button>
+                  </div>
+                  
+                  <div className="space-y-2 mb-2">
+                      <div className="flex gap-2">
+                        <input 
+                            type="text"
+                            value={trainingScenario} 
+                            onChange={(e) => setTrainingScenario(e.target.value)}
+                            placeholder="Describe rare failure (e.g. 'pump cavitation')"
+                            className="bg-slate-900 border border-slate-700 text-xs text-white rounded px-3 py-2 flex-1 focus:border-emerald-500 focus:outline-none"
+                        />
+                        <button 
+                            onClick={handleSyntheticTraining}
+                            disabled={!trainingScenario}
+                            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs px-4 py-2 rounded font-medium flex items-center gap-2"
+                        >
+                            <Sparkles className="w-3 h-3" /> Generate
+                        </button>
+                      </div>
+                      
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                            'Pump cavitation pitting', 
+                            'Electrical arcing on busbar', 
+                            'Hydraulic servo leakage', 
+                            'Conveyor belt fraying'
+                        ].map(preset => (
+                            <button
+                                key={preset}
+                                onClick={() => setTrainingScenario(preset)}
+                                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-[10px] text-slate-400 hover:text-white transition-colors"
+                            >
+                                {preset}
+                            </button>
+                        ))}
+                      </div>
+                  </div>
+
+                  <div className="bg-slate-950 rounded-xl border border-emerald-900 overflow-hidden relative">
+                       {trainingImage ? (
+                          <>
+                            <img src={trainingImage} alt="Training" className="w-full h-56 object-cover" />
+                            <div className="absolute bottom-0 w-full bg-black/80 backdrop-blur p-3 border-t border-emerald-900/50">
+                                <p className="text-xs text-emerald-200">
+                                    <span className="font-bold">Visual Training Aid:</span> {trainingScenario}. 
+                                    Study this generated anomaly to recognize early signs in the field.
+                                </p>
+                            </div>
+                          </>
+                       ) : <div className="h-56 bg-slate-800 flex items-center justify-center text-slate-500 text-xs">Enter a scenario and click Generate</div>}
+                  </div>
+              </div>
+          );
+      }
+
+      // Default: Overview Buttons - THE 5 PILLARS
+      return (
+        <div className="space-y-4 animate-in fade-in">
+             <div className="bg-slate-950 p-3 rounded border border-slate-800">
+                <label className="text-[10px] text-slate-500 block mb-1">Context / Scenario (AI Input)</label>
+                <div className="flex gap-2">
+                    <input 
+                        value={structuredPlan ? structuredPlan.diagnosis : manualPrompt}
+                        onChange={(e) => setManualPrompt(e.target.value)}
+                        readOnly={!!structuredPlan}
+                        className={`w-full bg-transparent border-none text-xs text-white focus:ring-0 p-0 placeholder-slate-600 ${structuredPlan ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    />
+                    {structuredPlan && <span className="text-[10px] text-emerald-500 font-bold whitespace-nowrap px-2">AI LOCKED</span>}
+                </div>
             </div>
 
-            <div className="flex-1 space-y-4 overflow-y-auto mb-4 custom-scrollbar">
-                {isAnalyzing ? (
-                    <div className="flex flex-col items-center justify-center h-40 space-y-3 animate-pulse">
-                        <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-indigo-300 text-sm">Processing telemetry streams...</p>
-                        <p className="text-slate-500 text-xs">Comparing against historical baselines...</p>
+            <div className="grid grid-cols-2 gap-3">
+                {/* 1. Golden Sample */}
+                <button 
+                    onClick={handleGoldenSample}
+                    className="flex flex-col gap-2 p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-indigo-500/50 rounded-lg transition-all group"
+                >
+                    <div className="flex items-center gap-2 text-indigo-400">
+                        <CheckCircle className="w-4 h-4" />
+                        <span className="text-xs font-bold uppercase">Golden Sample</span>
                     </div>
-                ) : aiInsight ? (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        {/* Analysis Text */}
-                        <div className="bg-indigo-950/30 border border-indigo-500/30 p-4 rounded-lg">
-                            <h4 className="text-indigo-400 text-sm font-semibold mb-2 uppercase tracking-wider">Analysis Result</h4>
-                            <p className="text-slate-300 text-sm leading-relaxed">
-                                {aiInsight}
-                            </p>
-                        </div>
-                        
-                        {/* Maintenance Plan (If Warning/Critical) */}
-                        {structuredPlan && (
-                            <div className="bg-slate-900 border border-slate-700 p-4 rounded-lg space-y-3">
-                                <div className="flex justify-between items-start">
-                                    <h4 className="text-white font-medium">Action Plan</h4>
-                                    <span className={`px-2 py-1 text-xs rounded uppercase font-bold ${
-                                        structuredPlan.urgency === 'Immediate' ? 'bg-red-500 text-white' :
-                                        structuredPlan.urgency === 'High' ? 'bg-orange-500 text-white' :
-                                        'bg-blue-500 text-white'
-                                    }`}>
-                                        {structuredPlan.urgency} Priority
-                                    </span>
-                                </div>
-                                <div className="space-y-2">
-                                    <div className="flex gap-2">
-                                        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                                        <div>
-                                            <span className="text-slate-400 text-xs block">Diagnosis</span>
-                                            <span className="text-slate-200 text-sm">{structuredPlan.diagnosis}</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                                        <div>
-                                            <span className="text-slate-400 text-xs block">Recommendation</span>
-                                            <span className="text-slate-200 text-sm">{structuredPlan.recommendation}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                        
-                        {/* Visual Simulation Lab - ALWAYS VISIBLE if analysis done */}
-                        <div className="bg-slate-900 border border-slate-700 p-4 rounded-lg space-y-3 mt-4">
-                            <div className="flex justify-between items-center border-b border-slate-800 pb-2 mb-2">
-                                <h5 className="text-[10px] text-slate-400 uppercase tracking-widest font-bold flex items-center gap-2">
-                                    <Sparkles className="w-3 h-3 text-indigo-400" />
-                                    Generative Action Lab
-                                </h5>
-                                <span className="text-[9px] bg-indigo-900/50 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 rounded">Gemini Imogen</span>
-                            </div>
-                            
-                            {isGeneratingImage ? (
-                                <div className="h-48 bg-black rounded border border-indigo-500/30 flex flex-col items-center justify-center gap-2">
-                                    <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                                    <span className="text-xs text-indigo-300 animate-pulse">Generating Visualization...</span>
-                                </div>
-                            ) : simulatedImage ? (
-                                <div className="space-y-2 animate-in fade-in">
-                                    <div className="relative group">
-                                        <img src={simulatedImage} alt="AI Simulation" className="w-full h-48 object-cover rounded border border-slate-600" />
-                                        <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 rounded text-[10px] text-white uppercase border border-white/20">
-                                            Generated: {simulationMode.replace('_', ' ')}
-                                        </div>
-                                    </div>
-                                    <button 
-                                        onClick={() => setSimulatedImage(null)}
-                                        className="text-xs text-slate-400 hover:text-white underline w-full text-center"
-                                    >
-                                        Return to Controls
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="space-y-3">
-                                    {/* If no Critical plan, allow manual scenario entry */}
-                                    {!structuredPlan && (
-                                        <div className="bg-slate-950 p-2 rounded border border-slate-800">
-                                            <label className="text-[10px] text-slate-500 block mb-1">Scenario (Simulated)</label>
-                                            <input 
-                                                value={manualSimulationPrompt}
-                                                onChange={(e) => setManualSimulationPrompt(e.target.value)}
-                                                className="w-full bg-transparent border-none text-xs text-white focus:ring-0 p-0 placeholder-slate-600"
-                                                placeholder="e.g. Broken valve stem..."
-                                            />
-                                        </div>
-                                    )}
-                                    
-                                    {/* Categorized Generation Buttons */}
-                                    <div>
-                                        <div className="text-[9px] text-slate-500 uppercase font-bold mb-1.5 pl-1">Diagnostics</div>
-                                        <div className="grid grid-cols-2 gap-2 mb-3">
-                                            <button 
-                                                onClick={() => handleGenerateImage('thermal')}
-                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
-                                            >
-                                                <Flame className="w-4 h-4 text-orange-500" />
-                                                <span className="text-[9px] text-slate-300">Heatmap</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => handleGenerateImage('failure')}
-                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
-                                            >
-                                                <ImageIcon className="w-4 h-4 text-rose-500" />
-                                                <span className="text-[9px] text-slate-300">Int. Damage</span>
-                                            </button>
-                                        </div>
-                                        
-                                        <div className="text-[9px] text-slate-500 uppercase font-bold mb-1.5 pl-1">Intervention</div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <button 
-                                                onClick={() => handleGenerateImage('part_detail')}
-                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
-                                            >
-                                                <PackageSearch className="w-4 h-4 text-emerald-500" />
-                                                <span className="text-[9px] text-slate-300">Spare Part</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => handleGenerateImage('repair_step')}
-                                                className="flex flex-col items-center justify-center gap-1 p-2 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors"
-                                            >
-                                                <Wrench className="w-4 h-4 text-blue-500" />
-                                                <span className="text-[9px] text-slate-300">Repair Guide</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
-                        <BrainCircuit className="w-12 h-12 opacity-20" />
-                        <p className="text-sm">Ready to analyze sensor streams.</p>
-                        <p className="text-xs text-slate-600 max-w-[200px] text-center">Gemini 2.5 is only invoked for anomaly explanation to conserve tokens.</p>
-                    </div>
-                )}
-            </div>
+                    <div className="text-[10px] text-slate-500 text-left leading-tight">QA Comparator: Brand new vs. Current</div>
+                </button>
 
-            <button
-                onClick={handleRunDiagnostics}
-                disabled={isAnalyzing}
-                className="w-full py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white rounded-lg font-medium shadow-lg shadow-indigo-500/20 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
-            >
-                {isAnalyzing ? 'Running Diagnostics...' : 'Run Gemini Analysis'}
-            </button>
-          </div>
-    </div>
-  );
+                {/* 2. Consequence Sim */}
+                <button 
+                    onClick={handleConsequenceSim}
+                    className="flex flex-col gap-2 p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-amber-500/50 rounded-lg transition-all group"
+                >
+                     <div className="flex items-center gap-2 text-amber-500">
+                        <History className="w-4 h-4" />
+                        <span className="text-xs font-bold uppercase">Future Risk</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 text-left leading-tight">Simulate failure if neglected (Motivation)</div>
+                </button>
+
+                {/* 3. Visual LOTO */}
+                <button 
+                    onClick={handleLotoOverlay}
+                    className="flex flex-col gap-2 p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-rose-500/50 rounded-lg transition-all group"
+                >
+                    <div className="flex items-center gap-2 text-rose-500">
+                        <Lock className="w-4 h-4" />
+                        <span className="text-xs font-bold uppercase">Visual LOTO</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 text-left leading-tight">Safety Overlay: Highlight Isolation Points</div>
+                </button>
+
+                {/* 4. Ghost View */}
+                <button 
+                    onClick={handleGhostView}
+                    className="flex flex-col gap-2 p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-lg transition-all group"
+                >
+                    <div className="flex items-center gap-2 text-blue-400">
+                        <Layers className="w-4 h-4" />
+                        <span className="text-xs font-bold uppercase">Ghost View</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 text-left leading-tight">X-Ray Assembly Guide for Repairs</div>
+                </button>
+
+                {/* 5. Synthetic Training */}
+                <button 
+                    onClick={() => setLabMode('synthetic_training')}
+                    className="flex items-center gap-3 p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-emerald-500/50 rounded-lg transition-all group col-span-2"
+                >
+                    <div className="p-2 bg-emerald-500/10 rounded group-hover:bg-emerald-500/20 text-emerald-400">
+                        <GraduationCap className="w-5 h-5" />
+                    </div>
+                    <div className="text-left">
+                        <div className="text-xs font-bold text-slate-200 uppercase tracking-wide">Synthetic Training Dojo</div>
+                        <div className="text-[10px] text-slate-500">Generate rare failure scenarios for onboarding</div>
+                    </div>
+                </button>
+            </div>
+        </div>
+      );
+  };
 
   const renderConfig = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 p-4 h-full overflow-y-auto">
@@ -541,41 +722,12 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                     <Settings className="w-5 h-5 text-indigo-400" />
                     Technical Specifications
                 </h3>
-                
-                {isEditing ? (
-                    <div className="flex items-center gap-2">
-                         <button 
-                            onClick={validateAndSaveConfig}
-                            className="flex items-center gap-1 text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded transition-colors"
-                         >
-                            <Save className="w-3 h-3" /> Save
-                         </button>
-                    </div>
-                ) : (
-                    <button 
-                        onClick={() => setIsEditing(true)}
-                        className="text-xs flex items-center gap-1 text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded border border-slate-700 transition-colors"
-                    >
-                        <Edit className="w-3 h-3" /> Edit Mode
-                    </button>
-                )}
             </div>
             
             <div className="grid grid-cols-2 gap-4">
-                {/* Model Number */}
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Model Number</div>
-                    {isEditing ? (
-                        <>
-                            <input 
-                                value={configForm.modelNumber}
-                                onChange={(e) => handleInputChange('modelNumber', e.target.value)}
-                                className={`w-full bg-slate-900 border ${errors.modelNumber ? 'border-rose-500' : 'border-slate-600'} rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500`}
-                            />
-                        </>
-                    ) : (
-                        <div className="text-white font-mono">{configForm.modelNumber || 'N/A'}</div>
-                    )}
+                    <div className="text-white font-mono">{configForm.modelNumber || 'N/A'}</div>
                 </div>
                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <div className="text-slate-500 text-xs uppercase mb-1">Serial Number</div>
@@ -598,34 +750,295 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
     </div>
   );
 
-  const renderHistory = () => (
-    <div className="h-full flex flex-col">
-        <div className="flex-1 overflow-auto bg-slate-800 rounded-lg border border-slate-700">
-            <table className="w-full text-sm text-left">
-                <thead className="bg-slate-950 text-slate-400 sticky top-0">
-                    <tr>
-                        <th className="px-4 py-3 font-medium">Timestamp</th>
-                        <th className="px-4 py-3 font-medium">Vibration (mm/s)</th>
-                        <th className="px-4 py-3 font-medium">Temp (°C)</th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-700">
-                    {[...machine.history].reverse().map((reading) => (
-                        <tr key={reading.timestamp} className="hover:bg-slate-700/50 transition-colors">
-                            <td className="px-4 py-3 font-mono text-slate-400">
-                                {new Date(reading.timestamp).toLocaleTimeString()}
-                            </td>
-                            <td className="px-4 py-3 font-mono text-slate-200">
-                                {reading.vibration.toFixed(3)}
-                            </td>
-                            <td className="px-4 py-3 font-mono text-slate-200">
-                                {reading.temperature.toFixed(2)}
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
+  const renderUnifiedTimeline = () => (
+    <div className="h-full overflow-y-auto pr-2 pb-20 space-y-4">
+        <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                <ClipboardList className="w-5 h-5 text-indigo-400" />
+                Operational Log & System Events
+            </h3>
+            <span className="text-xs text-slate-500">{unifiedTimeline.length} Entries</span>
         </div>
+
+        {/* Input Area */}
+        <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
+            <div className="flex gap-2 mb-2">
+                <div className="flex-1 relative">
+                    <input 
+                        type="text" 
+                        value={newLogText}
+                        onChange={(e) => setNewLogText(e.target.value)}
+                        placeholder={isDictating ? "Listening..." : "Add operator note..."}
+                        className={`w-full bg-slate-950 border ${isDictating ? 'border-rose-500 animate-pulse' : 'border-slate-700'} rounded-lg p-3 pl-4 text-sm text-white focus:border-indigo-500 outline-none transition-all`}
+                        onKeyDown={(e) => e.key === 'Enter' && handleAddLog()}
+                    />
+                    {isTranscribing && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                            <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+                        </div>
+                    )}
+                </div>
+                <button 
+                    onClick={isDictating ? stopDictation : startDictation}
+                    className={`p-3 rounded-lg border transition-all ${
+                        isDictating 
+                        ? 'bg-rose-500/20 border-rose-500 text-rose-400' 
+                        : 'bg-slate-700 border-slate-600 text-slate-300 hover:text-white hover:bg-slate-600'
+                    }`}
+                    title="Voice Dictation"
+                >
+                    <Mic className={`w-5 h-5 ${isDictating ? 'animate-pulse' : ''}`} />
+                </button>
+                <button 
+                    onClick={handleAddLog}
+                    disabled={!newLogText.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white px-6 rounded-lg font-medium transition-colors"
+                >
+                    Log
+                </button>
+            </div>
+            <p className="text-[10px] text-slate-500 pl-1">
+                Voice notes are automatically transcribed and tagged with your ID.
+            </p>
+        </div>
+
+        {/* Timeline */}
+        <div className="space-y-6 relative before:absolute before:left-4 before:top-2 before:bottom-0 before:w-0.5 before:bg-slate-800">
+            {unifiedTimeline.length === 0 && (
+                <div className="text-center py-10 text-slate-500 text-sm italic">No history available.</div>
+            )}
+            
+            {unifiedTimeline.map((item: any) => (
+                <div key={`${item.entryType}-${item.id || item.timestamp}`} className="relative pl-10 group">
+                    {/* Icon Bubble */}
+                    <div className={`absolute left-0 top-1 w-8 h-8 rounded-full flex items-center justify-center border-4 border-slate-900 z-10 ${
+                        item.entryType === 'ALERT' 
+                        ? (item.severity === 'high' ? 'bg-rose-500 text-white' : item.severity === 'medium' ? 'bg-amber-500 text-white' : 'bg-blue-500 text-white')
+                        : (item.type === 'audio_analysis' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300')
+                    }`}>
+                        {item.entryType === 'ALERT' ? <AlertTriangle className="w-4 h-4" /> : 
+                         item.type === 'audio_analysis' ? <AudioWaveform className="w-4 h-4" /> :
+                         <User className="w-4 h-4" />}
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 hover:border-slate-700 transition-colors">
+                        <div className="flex justify-between items-start mb-2">
+                             <div className="flex items-center gap-2">
+                                 <span className={`text-xs font-bold uppercase px-2 py-0.5 rounded ${
+                                     item.entryType === 'ALERT' ? 'bg-rose-950 text-rose-400' : 'bg-indigo-950 text-indigo-400'
+                                 }`}>
+                                     {item.entryType === 'ALERT' ? 'SYSTEM ALERT' : item.author}
+                                 </span>
+                                 <span className="text-xs text-slate-500">{new Date(item.timestamp).toLocaleString()}</span>
+                             </div>
+                        </div>
+                        <p className="text-sm text-slate-300 leading-relaxed">
+                            {item.content || item.message}
+                        </p>
+                        
+                        {/* Audio Analysis Meta Display */}
+                        {item.type === 'audio_analysis' && item.meta && (
+                             <div className="mt-3 bg-slate-950 rounded p-3 border border-slate-800 flex items-center gap-4">
+                                 <div className="p-2 bg-purple-500/10 rounded-full text-purple-400">
+                                     <AudioWaveform className="w-5 h-5" />
+                                 </div>
+                                 <div>
+                                     <div className="text-xs text-purple-300 font-bold">{item.meta.classification} ({item.meta.confidence})</div>
+                                     <div className="text-[10px] text-slate-500">{item.meta.description}</div>
+                                 </div>
+                             </div>
+                        )}
+                    </div>
+                </div>
+            ))}
+        </div>
+    </div>
+  );
+
+  const renderLiveMonitor = () => (
+    <div className="grid grid-cols-1 gap-4 h-full overflow-y-auto pr-2 pb-20">
+         {/* Charts */}
+         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+             <div className="xl:col-span-2">
+                <LiveCharts 
+                    data={machine.history} 
+                    color="#f43f5e" 
+                    dataKey="vibration" 
+                    label="Vibration Analysis" 
+                    unit="mm/s" 
+                    threshold={historicalStats?.vibration.limit} 
+                />
+             </div>
+             {/* Health Score Gauge */}
+             <div className="bg-slate-800/50 rounded-lg border border-slate-700 p-4 flex flex-col items-center justify-center relative overflow-hidden">
+                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 z-10">Asset Health Score</h3>
+                 <div className="relative z-10">
+                     <svg className="w-32 h-32 transform -rotate-90">
+                         <circle cx="64" cy="64" r="56" stroke="#1e293b" strokeWidth="12" fill="transparent" />
+                         <circle cx="64" cy="64" r="56" stroke={healthScore > 80 ? '#10b981' : healthScore > 50 ? '#f59e0b' : '#f43f5e'} strokeWidth="12" fill="transparent" strokeDasharray={351} strokeDashoffset={351 - (351 * healthScore) / 100} className="transition-all duration-1000 ease-out" />
+                     </svg>
+                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center">
+                         <div className="text-3xl font-bold text-white">{Math.round(healthScore)}</div>
+                         <div className="text-[10px] text-slate-500">/ 100</div>
+                     </div>
+                 </div>
+                 <div className="mt-2 text-xs text-slate-400 text-center max-w-[150px] z-10">
+                    {healthScore > 80 ? 'Optimal Performance' : healthScore > 50 ? 'Maintenance Advised' : 'Critical Condition'}
+                 </div>
+                 {/* Background Glow */}
+                 <div className={`absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t ${healthScore > 80 ? 'from-emerald-500/10' : healthScore > 50 ? 'from-amber-500/10' : 'from-rose-500/10'} to-transparent z-0`}></div>
+             </div>
+         </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <LiveCharts 
+                data={machine.history} 
+                color="#f59e0b" 
+                dataKey="temperature" 
+                label="Thermal Core Temp" 
+                unit="°C" 
+                threshold={historicalStats?.temperature.limit} 
+            />
+            <LiveCharts 
+                data={machine.history} 
+                color="#6366f1" 
+                dataKey="noise" 
+                label="Acoustic Decibels" 
+                unit="dB" 
+                threshold={historicalStats?.noise.limit} 
+            />
+        </div>
+         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <LiveCharts 
+                data={machine.history} 
+                color="#10b981" 
+                dataKey="rpm" 
+                label="Motor Speed" 
+                unit="RPM" 
+             />
+             <LiveCharts 
+                data={machine.history} 
+                color="#0ea5e9" 
+                dataKey="powerUsage" 
+                label="Power Consumption" 
+                unit="kW" 
+             />
+         </div>
+         
+         {/* Controls */}
+         <div className="flex flex-col md:flex-row gap-4 mt-4">
+             <button 
+                onClick={handleRunDiagnostics}
+                disabled={isAnalyzing}
+                className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white p-4 rounded-xl flex items-center justify-center gap-3 font-medium transition-all shadow-lg shadow-indigo-500/20"
+             >
+                 {isAnalyzing ? (
+                     <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                        Processing Neural Analysis...
+                     </>
+                 ) : (
+                     <>
+                        <BrainCircuit className="w-5 h-5" /> Run AI Diagnostics
+                     </>
+                 )}
+             </button>
+             
+             <button
+                onClick={isRecording ? stopRecording : startRecording}
+                className={`flex-1 p-4 rounded-xl flex items-center justify-center gap-3 font-medium transition-all shadow-lg ${
+                    isRecording 
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white animate-pulse shadow-rose-500/20' 
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+             >
+                {isRecording ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                {isRecording ? 'Stop Recording' : 'Analyze Audio Signature'}
+             </button>
+         </div>
+
+         {/* Audio Visualization Canvas */}
+         {isRecording && (
+             <div className="h-24 bg-slate-950 rounded-xl border border-slate-800 overflow-hidden relative shadow-inner">
+                 <canvas ref={canvasRef} className="w-full h-full" width={800} height={100} />
+                 <div className="absolute top-3 right-3 text-[10px] font-bold text-rose-500 flex items-center gap-1.5 bg-rose-950/50 px-2 py-1 rounded-full border border-rose-500/20">
+                     <div className="w-2 h-2 bg-rose-500 rounded-full animate-ping"></div> LIVE MIC
+                 </div>
+             </div>
+         )}
+
+         {/* Analysis Results */}
+         {(aiInsight || structuredPlan) && (
+             <div className="mt-4 bg-slate-900/80 backdrop-blur rounded-xl border border-indigo-500/30 p-5 animate-in fade-in slide-in-from-bottom-4 shadow-2xl">
+                 <div className="flex items-start gap-4">
+                     <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl text-white shrink-0 shadow-lg shadow-indigo-500/20">
+                         <Sparkles className="w-6 h-6" />
+                     </div>
+                     <div className="space-y-3 w-full">
+                         <div>
+                             <h4 className="font-bold text-white text-lg flex items-center gap-2">
+                                Gemini Diagnostics Engine
+                                <span className="text-[10px] px-2 py-0.5 bg-indigo-500/20 text-indigo-300 rounded border border-indigo-500/30">v2.5 Flash</span>
+                             </h4>
+                             <p className="text-slate-300 text-sm mt-2 leading-relaxed border-l-2 border-indigo-500/30 pl-3">
+                                 {structuredPlan?.diagnosis || aiInsight}
+                             </p>
+                         </div>
+                         
+                         {structuredPlan && (
+                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                                     <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Recommendation</div>
+                                     <div className="text-sm text-emerald-400 font-medium">{structuredPlan.recommendation}</div>
+                                 </div>
+                                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+                                     <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">Urgency Level</div>
+                                     <div className={`text-sm font-bold flex items-center gap-2 ${
+                                         structuredPlan.urgency === 'Immediate' || structuredPlan.urgency === 'High' ? 'text-rose-500' : 'text-amber-500'
+                                     }`}>
+                                         {structuredPlan.urgency === 'Immediate' && <AlertOctagon className="w-4 h-4" />}
+                                         {structuredPlan.urgency.toUpperCase()}
+                                     </div>
+                                 </div>
+                             </div>
+                         )}
+                     </div>
+                 </div>
+             </div>
+         )}
+         
+         {/* Audio Analysis Result */}
+         {audioAnalysis && !isRecording && (
+            <div className="mt-4 bg-slate-900/80 backdrop-blur rounded-xl border border-purple-500/30 p-5 animate-in fade-in slide-in-from-bottom-4">
+                 <div className="flex items-start gap-4">
+                     <div className="p-3 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl text-white shrink-0 shadow-lg shadow-purple-500/20">
+                         <AudioWaveform className="w-6 h-6" />
+                     </div>
+                     <div className="space-y-2 w-full">
+                        <h4 className="font-bold text-white text-lg">Acoustic Signature Analysis</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <div className="text-xs text-slate-500">Classification</div>
+                                <div className="text-purple-300 font-medium">{audioAnalysis.classification}</div>
+                            </div>
+                            <div>
+                                <div className="text-xs text-slate-500">Confidence</div>
+                                <div className="text-purple-300 font-medium">{audioAnalysis.confidence}</div>
+                            </div>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-2 bg-black/20 p-2 rounded">{audioAnalysis.description}</p>
+                     </div>
+                 </div>
+            </div>
+         )}
+
+         {/* GENERATIVE INDUSTRIAL LAB (MOUNTED HERE) */}
+         <div className="mt-6 border-t border-slate-800 pt-6">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-indigo-400" /> Generative Industrial Lab
+            </h3>
+            {renderGenLab()}
+         </div>
     </div>
   );
 
@@ -661,19 +1074,19 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
             <button onClick={() => setActiveTab('live')} className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'live' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
                 <MonitorPlay className="w-4 h-4" /> Live Telemetry
             </button>
+            <button onClick={() => setActiveTab('logbook')} className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'logbook' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
+                <ClipboardList className="w-4 h-4" /> Activity Timeline
+            </button>
             <button onClick={() => setActiveTab('config')} className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'config' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
                 <Settings className="w-4 h-4" /> Specs
-            </button>
-            <button onClick={() => setActiveTab('history')} className={`py-3 px-4 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'history' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
-                <ClipboardList className="w-4 h-4" /> Logs
             </button>
         </div>
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-hidden p-6 bg-slate-900/50">
             {activeTab === 'live' && renderLiveMonitor()}
+            {activeTab === 'logbook' && renderUnifiedTimeline()}
             {activeTab === 'config' && renderConfig()}
-            {activeTab === 'history' && renderHistory()}
         </div>
 
       </div>

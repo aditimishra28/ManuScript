@@ -1,7 +1,17 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { Machine, SensorReading } from "../types";
+import { Machine, SensorReading, LogEntry } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// -- SAFETY & COMPLIANCE LAYER --
+// Pre-flight check to prevent injection attacks or non-industrial usage
+const FORBIDDEN_KEYWORDS = ['weapon', 'violence', 'blood', 'human face', 'child', 'political', 'hate'];
+const INDUSTRIAL_CONTEXT_ENFORCER = "Focus strictly on industrial machinery, mechanical failure modes, and engineering diagrams. Do not depict people.";
+
+const validatePromptSafety = (prompt: string): boolean => {
+    const lower = prompt.toLowerCase();
+    return !FORBIDDEN_KEYWORDS.some(kw => lower.includes(kw));
+};
 
 // Helper for delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -21,8 +31,6 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Prom
 }
 
 // -- EDGE COMPUTING SIMULATION (TIER 1 ANALYSIS) --
-// We use Statistical Process Control (SPC) concepts here (Z-Score).
-// This runs locally in the browser to save API costs and latency.
 const calculateZScore = (value: number, history: number[]): number => {
     if (history.length < 5) return 0;
     const mean = history.reduce((a, b) => a + b, 0) / history.length;
@@ -35,11 +43,11 @@ const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string
     if (readings.length < 10) return null;
     const latest = readings[readings.length - 1];
     
-    // 1. Hard Threshold Checks (Safety Limits)
+    // 1. Hard Threshold Checks
     if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL: Vibration exceeds safety limits (ISO 10816 Zone D). Immediate shutdown recommended.";
     if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL: Core overheating detected. Fire hazard.";
 
-    // 2. Statistical Anomaly Detection (Z-Score > 3 is a 99.7% outlier)
+    // 2. Statistical Anomaly Detection
     const recentVibs = readings.slice(-20).map(r => r.vibration);
     const zScoreVib = calculateZScore(latest.vibration, recentVibs);
     
@@ -47,11 +55,10 @@ const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string
         return `WARNING: Statistical anomaly detected (Z-Score: ${zScoreVib.toFixed(1)}). Vibration is deviating significantly from the running average.`;
     }
 
-    // 3. Trend Analysis (Simple Linear Regression Slope)
+    // 3. Trend Analysis
     const recentTemps = readings.slice(-10).map(r => r.temperature);
     const first = recentTemps[0];
     const last = recentTemps[recentTemps.length - 1];
-    // If temp rose by more than 5 degrees in the last 10 ticks
     if (last - first > 5) {
         return "WARNING: Rapid thermal runaway detected (+5°C delta). Check coolant flow.";
     }
@@ -59,40 +66,35 @@ const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string
     return null;
 };
 
-// Analyze raw textual sensor data to find hidden patterns
+// Analyze raw textual sensor data AND human logs
 export const analyzeMachineHealth = async (
   machine: Machine,
   recentReadings: SensorReading[],
+  recentLogs: LogEntry[] = [],
   customThresholds?: { vibration: number; temperature: number; noise: number }
 ): Promise<string> => {
   
-  // TIER 1: Run local math first. Fast, free, zero-latency.
   const localInsight = localHeuristicCheck(recentReadings, customThresholds);
   
-  // Logic: If local insight finds a Critical issue, return immediately.
-  // If it finds a Warning or Nothing, we MIGHT ask Gemini for a "Second Opinion" if it's a Warning,
-  // but for "Normal" states, we skip the API call to save money.
+  // If Edge layer detects critical failure, return immediately (Speed > AI)
   if (localInsight && localInsight.includes("CRITICAL")) {
       return `[Automated Protection System]: ${localInsight}`;
   }
 
-  // If everything looks normal locally, we can return early or do a "random audit"
-  // to save tokens. Here we only call Gemini if there is a warning OR randomly (10% chance) for routine checks.
-  if (!localInsight && Math.random() > 0.1) {
-      return "System operating within normal statistical parameters.";
-  }
-
-  // TIER 2: Gemini Cloud Analysis
-  // Triggered for Warnings or Routine Audits
   const readingsSummary = recentReadings.slice(-10).map(r => 
     `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}`
   ).join('\n');
 
+  // Format logs for context
+  const logsSummary = recentLogs.length > 0 
+    ? recentLogs.slice(0, 5).map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.author} (${l.type}): ${l.content}`).join('\n')
+    : "No recent operator notes.";
+
   const context = customThresholds 
     ? `
-    - Dynamic Vibration Limit: < ${customThresholds.vibration.toFixed(2)} mm/s (Based on historical pattern)
-    - Dynamic Temperature Limit: < ${customThresholds.temperature.toFixed(1)} °C (Based on historical pattern)
-    - Dynamic Noise Limit: < ${customThresholds.noise.toFixed(1)} dB (Based on historical pattern)
+    - Dynamic Vibration Limit: < ${customThresholds.vibration.toFixed(2)} mm/s
+    - Dynamic Temperature Limit: < ${customThresholds.temperature.toFixed(1)} °C
+    - Dynamic Noise Limit: < ${customThresholds.noise.toFixed(1)} dB
     `
     : `
     - Normal Vibration: < 5.0 mm/s
@@ -101,23 +103,34 @@ export const analyzeMachineHealth = async (
     `;
 
   const prompt = `
-    You are an expert industrial reliability engineer AI.
-    Analyze the following recent sensor telemetry for machine "${machine.name}" (${machine.type}).
+    You are an expert industrial reliability engineer AI (Gemini).
+    Analyze the machine health by cross-referencing Sensor Telemetry with Operator Observations.
+
+    Machine: "${machine.name}" (${machine.type}).
     
-    Context:
+    Context Limits:
     ${context}
 
-    Recent Readings (Last 10 points):
+    recent_sensor_telemetry (Last 10 points):
     ${readingsSummary}
     
-    ${localInsight ? `Local Analysis Flag: ${localInsight}` : ''}
+    recent_operator_logs (Human Context):
+    ${logsSummary}
+    
+    ${localInsight ? `Local Algorithm Flag: ${localInsight}` : ''}
 
     Task:
-    1. Compare readings against the provided limits.
-    2. Identify any subtle non-linear trends.
-    3. Predict potential failures.
+    1. Compare readings against limits.
+    2. IMPORTANT: Check if operator logs (e.g., "grinding sound", "smell of smoke") correlate with sensor trends. 
+    3. If a human reported an issue and sensors confirm it, escalate the urgency.
     
-    Keep the response under 100 words. Focus on technical accuracy.
+    SAFETY PROTOCOL:
+    - Do NOT recommend overriding safety interlocks.
+    - If specific failure mode is unknown, recommend manual inspection.
+    - Append standard disclaimer: "AI generated insight. Verify before maintenance."
+
+    Output:
+    Provide a concise technical assessment (under 100 words). Mention if you used the operator's log in your deduction.
   `;
 
   try {
@@ -137,6 +150,10 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
     const prompt = `
         Context: Machine ${machineContext} has triggered an alert: "${alertMessage}".
         Generate a structured JSON response with a diagnosis, recommended action, and urgency level.
+        
+        SAFETY RULES:
+        - Recommendation must follow standard LOTO (Lockout/Tagout) procedures.
+        - Urgency must be High if temperature > 100C or Vibration > 10mm/s.
     `;
 
     try {
@@ -158,17 +175,7 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
         
         const text = response.text || "{}";
         const cleanJson = text.replace(/```json|```/g, '').trim();
-        
-        try {
-            return JSON.parse(cleanJson);
-        } catch (parseError) {
-            console.warn("JSON Parse Failed for AI plan", parseError);
-            return { 
-                diagnosis: "Automated parsing failed.", 
-                recommendation: "Review raw logs manually.", 
-                urgency: "High" 
-            };
-        }
+        return JSON.parse(cleanJson);
     } catch (e) {
         console.error("Plan generation failed", e);
         return { diagnosis: "Unknown Issue", recommendation: "Manual inspection required", urgency: "Medium" };
@@ -176,36 +183,141 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
 };
 
 /**
- * VISUAL SIMULATION ENGINE
+ * FEATURE 1: Acoustic Anomaly Detection (Shazam for Machines)
+ */
+export const analyzeAudioSignature = async (machineType: string, base64Audio: string, mimeType: string = "audio/webm") => {
+    const prompt = `
+      You are an Acoustic Engineer. Listen to this recording of a ${machineType}.
+      Analyze the sound signature. Identify patterns like grinding, hissing, cavitation, or imbalance.
+      Return a JSON with 'classification' (Normal, Bearing Fault, Gear Mesh, Loose Mount), 'confidence' (percentage), and a 'description' of the sound.
+    `;
+
+    try {
+        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+            contents: {
+                parts: [
+                    { text: prompt },
+                    { 
+                        inlineData: {
+                            mimeType: mimeType, 
+                            data: base64Audio
+                        }
+                    }
+                ]
+            },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        classification: { type: Type.STRING },
+                        confidence: { type: Type.STRING },
+                        description: { type: Type.STRING }
+                    }
+                }
+            }
+        }));
+        return JSON.parse(response.text || "{}");
+    } catch (e) {
+        console.error("Audio analysis failed", e);
+        return { 
+            classification: "Analysis Error", 
+            confidence: "0%", 
+            description: "Could not process audio stream." 
+        };
+    }
+};
+
+/**
+ * FEATURE 2: Contextual Voice Logbook (Voice-to-Text)
+ */
+export const transcribeAudioLog = async (base64Audio: string, mimeType: string = "audio/webm"): Promise<string> => {
+    const prompt = `
+        You are a manufacturing log assistant. 
+        Transcribe the following voice note from an operator accurately. 
+        Remove filler words (um, uh). 
+        Format technical terms correctly (e.g., '500 PSI', 'bearing 2B').
+        Return ONLY the transcribed text.
+    `;
+
+    try {
+        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
+            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+            contents: {
+                parts: [
+                    { text: prompt },
+                    { 
+                        inlineData: {
+                            mimeType: mimeType, 
+                            data: base64Audio
+                        }
+                    }
+                ]
+            }
+        }));
+        return response.text || "";
+    } catch (e) {
+        console.error("Transcription failed", e);
+        return "";
+    }
+};
+
+/**
+ * VISUAL SIMULATION ENGINE - UPDATED FOR 5 PAIN POINTS
  */
 export const generateVisualSimulation = async (
     machineName: string, 
     issueDescription: string, 
-    mode: 'failure' | 'thermal' | 'diagram' | 'part_detail' | 'repair_step'
+    mode: 'golden_sample' | 'consequence' | 'loto_overlay' | 'ghost_view' | 'synthetic_training',
+    customPromptOverride?: string
 ): Promise<string | null> => {
     
-    let prompt = "";
-    
-    switch(mode) {
-        // STRATEGY 1: DIAGNOSTIC DIGITAL TWINS
-        case 'failure':
-            prompt = `Photorealistic macro photography of internal components of a ${machineName}, showing severe damage: ${issueDescription}. Industrial lighting, grime, realistic texture, high detail, 4k. Focus on the failure point.`;
-            break;
-        case 'thermal':
-            prompt = `Thermal camera heatmap visualization of a ${machineName}, indicating extreme heat (red/white) caused by ${issueDescription}. Dark blue background for cold areas, accurate industrial thermal imaging style.`;
-            break;
-        case 'diagram':
-            prompt = `Technical blueprint illustration, exploded view of ${machineName}, highlighting the component related to: ${issueDescription}. White lines on blue background, schematic style, engineering diagram.`;
-            break;
-            
-        // STRATEGY 2: INTERVENTION & REPAIR VISUALS
-        case 'part_detail':
-            prompt = `Studio product photography of a heavy industrial spare part for a ${machineName}, specifically the component related to: ${issueDescription}. Clean white background, high resolution, industrial catalog style. Isolate the part.`;
-            break;
-        case 'repair_step':
-            prompt = `Instructional technical illustration of a maintenance technician's hands using tools to fix ${issueDescription} on a ${machineName}. Blue and white vector line art style, IKEA manual aesthetic, clear action, safety gloves visible.`;
-            break;
+    // 1. Safety Guardrail
+    if (customPromptOverride && !validatePromptSafety(customPromptOverride)) {
+        console.warn("Safety Block: Custom prompt contained restricted keywords.");
+        return null; // Fail gracefully
     }
+
+    let prompt = "";
+
+    // If a specific visual prompt is provided (e.g. from the JSON steps), use it.
+    if (customPromptOverride) {
+        prompt = `Industrial technical illustration: ${customPromptOverride}. High definition, professional context.`;
+    } else {
+        switch(mode) {
+            case 'golden_sample':
+                prompt = `Golden Sample Reference: Photorealistic, high-resolution product photography of a brand new, pristine ${machineName} component related to ${issueDescription}. 
+                Perfect condition, clean metallic surfaces, factory lighting, no wear, no rust, no oil. Use a neutral studio background.`;
+                break;
+                
+            case 'consequence':
+                prompt = `Simulation of Catastrophic Failure: Photorealistic industrial image of a ${machineName} component that has been severely damaged due to neglected ${issueDescription}. 
+                Show extreme wear, seized bearings turned black, heavy rust, structural cracks, metal shavings, and smoke residue. Dramatic warning visualization.`;
+                break;
+                
+            case 'loto_overlay':
+                prompt = `Industrial Safety Visualization: A photo of a ${machineName} panel or piping system. 
+                OVERLAY: Highlight specific isolation valves and electrical breakers in GLOWING RED and GREEN outlines. 
+                Add floating 'LOCKED' tag icons. The image should clearly indicate where to place physical locks for Lockout/Tagout (LOTO). High contrast.`;
+                break;
+                
+            case 'ghost_view':
+                prompt = `Technical 'Ghost View' Illustration: A semi-transparent X-Ray view of a ${machineName} housing related to ${issueDescription}. 
+                Show the external casing as transparent glass/wireframe, revealing the internal mounting bolts, clips, and gears inside. 
+                Engineering blueprint style, blue and white, high technical detail for assembly guidance.`;
+                break;
+                
+            case 'synthetic_training':
+                prompt = `Industrial Training Scenario: A photorealistic simulation of a rare failure mode on a ${machineName}. 
+                Depict: ${issueDescription}. 
+                The image should be realistic enough to train a new operator on what to look for. Detailed textures of leakage, smoke, or misalignment.`;
+                break;
+        }
+    }
+
+    // MANDATORY SAFETY OVERRIDE FOR IMAGEN
+    prompt += ` ${INDUSTRIAL_CONTEXT_ENFORCER} The image must not depict real people injured. Focus purely on mechanical equipment damage.`;
 
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({

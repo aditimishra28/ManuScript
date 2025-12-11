@@ -1,5 +1,5 @@
 import Dexie, { Table } from 'dexie';
-import { Machine, SensorReading, Alert, MachineStatus } from '../types';
+import { Machine, SensorReading, Alert, MachineStatus, LogEntry } from '../types';
 
 // We extend SensorReading to include machineId for relational queries
 export interface SensorReadingRecord extends SensorReading {
@@ -16,14 +16,16 @@ class SentinAIDatabase extends Dexie {
   machines!: Table<MachineRecord, string>;
   readings!: Table<SensorReadingRecord, number>;
   alerts!: Table<Alert, string>;
+  logs!: Table<LogEntry, number>;
 
   constructor() {
     super('SentinAIDB');
     
-    (this as any).version(1).stores({
+    (this as any).version(2).stores({
       machines: 'id, status, type', 
       readings: '++id, machineId, timestamp, [machineId+timestamp], isAggregated',
-      alerts: 'id, machineId, timestamp, severity'
+      alerts: 'id, machineId, timestamp, severity',
+      logs: '++id, machineId, timestamp, type'
     });
   }
 
@@ -56,6 +58,18 @@ class SentinAIDatabase extends Dexie {
           ...machineRecord,
           history: history.reverse()
       };
+  }
+
+  async getMachineLogs(id: string): Promise<LogEntry[]> {
+      return await this.logs
+        .where('machineId')
+        .equals(id)
+        .reverse()
+        .sortBy('timestamp');
+  }
+
+  async addLogEntry(entry: LogEntry) {
+      await this.logs.add(entry);
   }
 
   async getAllMachinesWithLatestHistory(): Promise<Machine[]> {

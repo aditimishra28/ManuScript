@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Activity, 
   AlertOctagon, 
@@ -96,10 +96,32 @@ const App = () => {
     }
   }, [isAuthenticated]);
 
-  const filteredMachines = machines.filter(m => 
-    m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    m.id.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // -- PERFORMANCE OPTIMIZATION: Memoize expensive filtering --
+  const filteredMachines = useMemo(() => {
+    const lowerTerm = searchTerm.toLowerCase();
+    return machines.filter(m => 
+        m.name.toLowerCase().includes(lowerTerm) || 
+        m.id.toLowerCase().includes(lowerTerm)
+    );
+  }, [machines, searchTerm]);
+
+  // -- PERFORMANCE OPTIMIZATION: Memoize Stats Calculation --
+  const stats = useMemo(() => {
+    const criticalCount = machines.filter(m => m.status === MachineStatus.CRITICAL).length;
+    
+    // Calculate total power usage roughly based on last reading
+    const totalPower = machines.reduce((acc, m) => {
+        const lastReading = m.history[m.history.length - 1];
+        return acc + (lastReading?.powerUsage || 0);
+    }, 0);
+
+    return {
+        total: machines.length,
+        critical: criticalCount,
+        power: Math.round(totalPower),
+        efficiency: 94.2 // Placeholder logic for now
+    };
+  }, [machines]);
 
   // -- Render Helpers --
 
@@ -107,7 +129,7 @@ const App = () => {
     <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-slate-400 text-sm font-medium">Total Machines</h3>
-            <div className="text-3xl font-bold text-white mt-2">{machines.length}</div>
+            <div className="text-3xl font-bold text-white mt-2">{stats.total}</div>
             <div className="text-emerald-500 text-xs mt-2 flex items-center gap-1">
                 <Activity className="w-3 h-3" /> 100% Online
             </div>
@@ -115,18 +137,20 @@ const App = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-slate-400 text-sm font-medium">Critical Issues</h3>
             <div className="text-3xl font-bold text-white mt-2">
-                {machines.filter(m => m.status === MachineStatus.CRITICAL).length}
+                {stats.critical}
             </div>
-            <div className="text-rose-500 text-xs mt-2">Requires Attention</div>
+            <div className={`text-xs mt-2 ${stats.critical > 0 ? 'text-rose-500' : 'text-slate-500'}`}>
+                {stats.critical > 0 ? 'Requires Immediate Attention' : 'Systems Nominal'}
+            </div>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-slate-400 text-sm font-medium">Avg Efficiency</h3>
-            <div className="text-3xl font-bold text-white mt-2">94.2%</div>
+            <div className="text-3xl font-bold text-white mt-2">{stats.efficiency}%</div>
             <div className="text-slate-500 text-xs mt-2">Target: 92%</div>
         </div>
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-slate-400 text-sm font-medium">Power Usage</h3>
-            <div className="text-3xl font-bold text-white mt-2">452 <span className="text-lg text-slate-500 font-normal">kW</span></div>
+            <div className="text-3xl font-bold text-white mt-2">{stats.power} <span className="text-lg text-slate-500 font-normal">kW</span></div>
             <div className="text-amber-500 text-xs mt-2">+2.4% vs last hour</div>
         </div>
     </div>

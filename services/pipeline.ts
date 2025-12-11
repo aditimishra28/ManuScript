@@ -38,16 +38,24 @@ type PipelineListener = (
 // -- Fallback Simulation Helpers --
 const generateFallbackReading = (timestamp: number, status: MachineStatus): SensorReading => {
   const t = timestamp / 1000;
+  
+  // Base Parameters
   const baseVib = status === MachineStatus.NORMAL ? 2.5 : status === MachineStatus.WARNING ? 5.5 : 8.5;
   const baseTemp = status === MachineStatus.NORMAL ? 65 : status === MachineStatus.WARNING ? 78 : 95;
   
+  // Add realistic "Micro-Jitter" (Industrial sensors are never perfectly smooth)
+  const jitter = () => (Math.random() - 0.5) * 0.2; 
+  
+  // Occasional "Spike" (1% chance) to simulate transient noise
+  const spike = Math.random() > 0.99 ? 2.0 : 0;
+
   return {
     timestamp,
-    vibration: Math.max(0, baseVib + (Math.sin(t * 2) * 0.5) + (Math.random() * 0.5)),
-    temperature: Math.max(20, baseTemp + (Math.sin(t * 0.1) * 2) + (Math.random())),
-    noise: Math.max(40, 70 + (Math.abs(Math.sin(t * 0.5)) * 5) + (Math.random() * 2)),
+    vibration: Math.max(0, baseVib + (Math.sin(t * 2) * 0.5) + jitter() + (status === MachineStatus.CRITICAL ? spike : 0)),
+    temperature: Math.max(20, baseTemp + (Math.sin(t * 0.1) * 2) + jitter()),
+    noise: Math.max(40, 70 + (Math.abs(Math.sin(t * 0.5)) * 5) + jitter() + (spike * 10)),
     rpm: 1200 + (Math.sin(t) * 10) + (Math.random() * 5),
-    powerUsage: 45 + (Math.cos(t) * 2)
+    powerUsage: 45 + (Math.cos(t) * 2) + jitter()
   };
 };
 

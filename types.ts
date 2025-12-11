@@ -1,3 +1,4 @@
+
 export enum MachineStatus {
   NORMAL = 'NORMAL',
   WARNING = 'WARNING',
@@ -12,6 +13,16 @@ export interface SensorReading {
   noise: number; // dB
   rpm: number;
   powerUsage: number; // kW
+}
+
+export interface LogEntry {
+  id?: number;
+  machineId: string;
+  timestamp: number;
+  author: string;
+  content: string;
+  type: 'human' | 'system' | 'audio_analysis';
+  meta?: any; // To store audio diagnosis results or file refs
 }
 
 export interface Machine {
