@@ -167,10 +167,15 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
       if (!structuredPlan?.diagnosis) return;
       const machineCtx = getMachineContext();
       setLoadingVisual('defect');
-      const dImg = await generateVisualSimulation(machineCtx, structuredPlan.diagnosis, 'defect_current');
+      
+      // Use explicit visual cues from the reasoning model if available, otherwise fallback to diagnosis
+      const defectPrompt = structuredPlan.visualDefectCues || structuredPlan.diagnosis;
+      const goldenPrompt = structuredPlan.visualGoldenCues || structuredPlan.diagnosis;
+
+      const dImg = await generateVisualSimulation(machineCtx, defectPrompt, 'defect_current');
       setDefectImage(dImg);
       setLoadingVisual('golden');
-      const gImg = await generateVisualSimulation(machineCtx, structuredPlan.diagnosis, 'golden_sample');
+      const gImg = await generateVisualSimulation(machineCtx, goldenPrompt, 'golden_sample');
       setGoldenImage(gImg);
       setLoadingVisual(null);
   };
@@ -322,7 +327,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         <span className="px-2 py-1 rounded bg-blue-50 dark:bg-navy-800 border border-blue-100 dark:border-navy-700 text-blue-800 dark:text-blue-200 text-[10px] font-bold uppercase tracking-widest flex items-center gap-1">
                             <Sparkles className="w-3 h-3" /> HERO FEATURE
                         </span>
-                        <span className="text-xs text-gray-500 font-mono">GEMINI-2.5-FLASH-IMAGE</span>
+                        <span className="text-xs text-gray-500 font-mono">GEMINI IMAGE GENERATION</span>
                       </div>
                       <h4 className="text-2xl font-bold text-blue-950 dark:text-white flex items-center gap-2">
                           Generative Simulation Lab
@@ -371,7 +376,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                           </div>
                       </div>
                       <div className="absolute bottom-0 w-full bg-gradient-to-t from-black via-black/90 to-transparent p-6 pt-12 translate-y-full group-hover:translate-y-0 transition-transform duration-300">
-                          <p className="text-rose-200 text-sm font-medium leading-tight">{structuredPlan?.diagnosis || "Diagnosis Pending..."}</p>
+                          <p className="text-rose-200 text-sm font-medium leading-tight">{structuredPlan?.visualDefectCues || structuredPlan?.diagnosis || "Diagnosis Pending..."}</p>
                           <p className="text-[10px] text-rose-400/70 mt-1 uppercase tracking-wider">AI Confidence: 94%</p>
                       </div>
                   </div>
@@ -393,7 +398,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                           </div>
                       </div>
                        <div className="absolute bottom-0 w-full bg-gradient-to-t from-black via-black/90 to-transparent p-6 pt-12 translate-y-full group-hover:translate-y-0 transition-transform duration-300">
-                          <p className="text-emerald-200 text-sm font-medium leading-tight">Reference Standard (OEM)</p>
+                          <p className="text-emerald-200 text-sm font-medium leading-tight">{structuredPlan?.visualGoldenCues || "Reference Standard (OEM)"}</p>
                           <p className="text-[10px] text-emerald-400/70 mt-1 uppercase tracking-wider">Target Condition</p>
                       </div>
                   </div>
@@ -608,7 +613,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                          <div>
                              <h4 className="font-bold text-blue-950 dark:text-white text-lg flex items-center gap-2">
                                 Gemini Diagnostics Engine
-                                <span className="text-[10px] px-2 py-0.5 bg-gray-100 dark:bg-navy-800 text-gray-600 dark:text-slate-300 rounded border border-gray-200 dark:border-navy-700">v2.5 Flash</span>
+                                <span className="text-[10px] px-2 py-0.5 bg-gray-100 dark:bg-navy-800 text-gray-600 dark:text-slate-300 rounded border border-gray-200 dark:border-navy-700">Gemini 3 Pro</span>
                              </h4>
                              <p className="text-gray-600 dark:text-slate-300 text-sm mt-2 leading-relaxed border-l-2 border-gray-200 dark:border-navy-700 pl-3">
                                  {structuredPlan?.diagnosis || aiInsight}

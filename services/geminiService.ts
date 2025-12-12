@@ -59,11 +59,20 @@ export const localHeuristicCheck = (readings: SensorReading[], thresholds: any):
     if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL: Vibration exceeds safety limits (ISO 10816 Zone D). Possible Misalignment or Bearing Failure.";
     if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL: Core overheating detected. Fire hazard. Possible Lubrication Failure.";
 
-    // Statistical Anomaly (Simplified Z-Score)
+    // Statistical Anomaly (True Z-Score Analysis)
     const recentVibs = readings.slice(-20).map(r => r.vibration);
     const mean = recentVibs.reduce((a, b) => a + b, 0) / recentVibs.length;
-    if (Math.abs(latest.vibration - mean) > 3.0) {
-         return "WARNING: Statistical anomaly detected. Vibration deviation > 3.0.";
+    
+    // Calculate Standard Deviation (Sigma)
+    const variance = recentVibs.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / recentVibs.length;
+    const stdDev = Math.sqrt(variance);
+
+    // Calculate Z-Score: (Value - Mean) / StdDev
+    const zScore = stdDev === 0 ? 0 : (latest.vibration - mean) / stdDev;
+
+    // Threshold: 3 Sigma (99.7% confidence interval deviation)
+    if (Math.abs(zScore) > 3.0) {
+         return `WARNING: Statistical anomaly detected. Z-Score ${zScore.toFixed(2)} (> 3σ). Check for transient shocks.`;
     }
 
     return null;
@@ -97,8 +106,14 @@ export const analyzeMachineHealth = async (
     : "No recent operator notes.";
 
   const prompt = `
-    You are an expert industrial reliability engineer AI (Gemini).
+    You are an expert industrial reliability engineer AI (Gemini 3 Pro).
     Analyze the machine health by cross-referencing Sensor Telemetry with Operator Observations.
+    
+    STRICT GROUNDING RULES:
+    1. Only analyze the data provided below. Do not hallucinate external events or failure modes not supported by evidence.
+    2. If the data indicates normal operation, state "System Nominal".
+    3. Keep the diagnosis technical, concise, and professional.
+
     Machine: "${machine.name}" (${machine.type}).
     
     Data (Last 50 Points):
@@ -119,7 +134,7 @@ export const analyzeMachineHealth = async (
 
   try {
     const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-pro-preview', // UPGRADED to Gemini 3 Pro for superior reasoning
       contents: prompt,
     }));
     return response.text || "Analysis unavailable.";
@@ -147,7 +162,11 @@ export const analyzeAttachedImage = async (
     const prompt = `
         You are a Senior Industrial Mechanic.
         Context: The machine '${machineName}' has diagnosis: "${currentDiagnosis}".
-        Analyze the attached photo.
+        Analyze the attached photo to verify this diagnosis.
+        
+        GROUNDING:
+        - Only identify defects visible in the image.
+        - If the image is unclear or shows no defects, state that.
         
         Output JSON:
         {
@@ -159,7 +178,7 @@ export const analyzeAttachedImage = async (
 
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash', 
+            model: 'gemini-3-pro-preview', // UPGRADED to Gemini 3 Pro for multimodal vision analysis
             contents: {
                 parts: [
                     { text: prompt },
@@ -187,18 +206,24 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
                 "Retighten bolts to 45Nm torque.",
                 "Run calibration sequence."
             ],
-            requiredTools: "Hex Key Set, Dial Indicator, Torque Wrench"
+            requiredTools: "Hex Key Set, Dial Indicator, Torque Wrench",
+            visualDefectCues: "The motor coupler will show visible gaps or angular offset.",
+            visualGoldenCues: "Perfectly aligned motor shaft and lead screw with flush coupling."
         };
     }
 
     const prompt = `
         Context: Machine ${machineContext}, Issue: "${alertMessage}".
         Generate structured maintenance plan.
+        
+        CRITICAL: Provide vivid visual descriptions for image generation.
+        'visualDefectCues': Describe exactly what the damaged part looks like (e.g. "cracked casing", "burnt wiring").
+        'visualGoldenCues': Describe exactly what the factory-new part looks like (e.g. "shiny metallic surface", "connected wire").
     `;
 
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-pro-preview', // UPGRADED to Gemini 3 Pro for complex structured planning
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
@@ -208,7 +233,9 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
                         diagnosis: { type: Type.STRING },
                         urgency: { type: Type.STRING, enum: ["Low", "Medium", "High", "Immediate"] },
                         repairSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        requiredTools: { type: Type.STRING }
+                        requiredTools: { type: Type.STRING },
+                        visualDefectCues: { type: Type.STRING, description: "Visual description of the damage for image generation prompt." },
+                        visualGoldenCues: { type: Type.STRING, description: "Visual description of the perfect part for image generation prompt." }
                     }
                 }
             }
@@ -229,24 +256,32 @@ export const generateVisualSimulation = async (
     if (IS_MOCK_MODE) return null; // Cannot mock generated images
 
     let prompt = "";
-    const NEGATIVE_PROMPT = "Exclude: people faces, human bodies, animals, biological matter, text, watermarks, cartoon.";
-    const STYLE_GUIDE = "Style: 8k resolution, Photorealistic Industrial Macro Photography, Cinematic Lighting, Metallic Texture.";
+    const NEGATIVE_PROMPT = "Exclude: people faces, human bodies, animals, biological matter, text, watermarks, cartoon, blueprint, schematics, white background.";
+    const STYLE_GUIDE = "Style: 8k resolution, Photorealistic Industrial Macro Photography, Cinematic Lighting, Metallic Texture, Depth of Field.";
 
     switch(mode) {
         case 'golden_sample':
-            prompt = `Reference Image: Factory-perfect part for ${machineInfo}. Context: ${context}. Clean metal, perfect alignment.`;
+            // Context here should be the visualGoldenCues if available
+            prompt = `Close-up macro photo of a factory-new spare part for ${machineInfo}. 
+            Object Description: ${context}. 
+            Condition: Pristine, clean metal, perfect engineering, no scratches, factory perfect.`;
             break;
         case 'defect_current':
-            prompt = `Failure Analysis: Broken component on ${machineInfo}. Diagnosis: ${context}. Show heat discoloration, rust, or cracks.`;
+            // Context here should be the visualDefectCues if available
+            prompt = `Close-up macro photo of a damaged industrial component on ${machineInfo}. 
+            Defect Description: ${context}. 
+            Condition: Broken, worn, oxidized, burnt, or cracked. High contrast inspection light.`;
             break;
         case 'repair_step':
-            prompt = `Maintenance Guide: ${machineInfo}. Action: "${stepDetail}". Close-up of tool working on part.`;
+            prompt = `First-person view action shot of industrial maintenance on ${machineInfo}. 
+            Action: "${stepDetail}". 
+            Show: Professional tools, gloved hands (safety gear), mechanical parts.`;
             break;
     }
 
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
+            model: 'gemini-2.5-flash-image', // Generating standard images
             contents: { parts: [{ text: `${prompt} ${INDUSTRIAL_CONTEXT_ENFORCER} ${STYLE_GUIDE} ${NEGATIVE_PROMPT}` }] },
             config: { imageConfig: { aspectRatio: "16:9" } }
         }));
@@ -268,7 +303,7 @@ export const analyzeAudioSignature = async (machineType: string, base64Audio: st
     const prompt = `Analyze this ${machineType} audio. Return JSON with 'classification', 'confidence', 'description'.`;
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+            model: 'gemini-3-pro-preview', // UPGRADED to Gemini 3 Pro (supports Audio in standard generateContent)
             contents: {
                 parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Audio } }]
             },
@@ -294,7 +329,7 @@ export const transcribeAudioLog = async (base64Audio: string, mimeType: string =
     if (IS_MOCK_MODE) return "Simulation: Operator log transcription unavailable without API key.";
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+            model: 'gemini-3-pro-preview', // UPGRADED to Gemini 3 Pro
             contents: {
                 parts: [{ text: "Transcribe audio." }, { inlineData: { mimeType, data: base64Audio } }]
             }
