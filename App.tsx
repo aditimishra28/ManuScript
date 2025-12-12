@@ -20,7 +20,8 @@ import {
   Lock,
   X,
   Moon,
-  Sun
+  Sun,
+  Key as KeyIcon
 } from 'lucide-react';
 import { Machine, MachineStatus, Alert } from './types';
 import MachineModel from './components/MachineModel';
@@ -58,6 +59,43 @@ const App = () => {
 
   // User info state - Default to Admin/Operator since auth is removed
   const [currentUser, setCurrentUser] = useState({ name: 'Senior Operator', role: 'Admin' });
+
+  // API Key State
+  const [hasApiKey, setHasApiKey] = useState(false);
+
+  // Check for API Key on mount (Required for Gemini 3 Pro features)
+  useEffect(() => {
+    const checkKey = async () => {
+        if ((window as any).aistudio) {
+            try {
+                const has = await (window as any).aistudio.hasSelectedApiKey();
+                setHasApiKey(has);
+            } catch (e) {
+                console.warn("Failed to check API key status", e);
+            }
+        } else {
+            // Fallback: Check if process.env.API_KEY is populated by other means
+            setHasApiKey(!!process.env.API_KEY && !process.env.API_KEY.includes('YOUR_KEY'));
+        }
+    };
+    checkKey();
+  }, []);
+
+  const handleConnectApiKey = async () => {
+    if ((window as any).aistudio) {
+        try {
+            await (window as any).aistudio.openSelectKey();
+            // Assuming successful selection if promise resolves
+            const has = await (window as any).aistudio.hasSelectedApiKey();
+            setHasApiKey(has);
+            window.location.reload(); // Reload to ensure services pick up the new env var
+        } catch (e) {
+            console.error("API Key selection failed", e);
+        }
+    } else {
+        alert("API Key selection is only available in the AI Studio / IDX environment.");
+    }
+  };
 
   // Apply Theme Effect
   useEffect(() => {
@@ -305,7 +343,7 @@ const App = () => {
                <img src={thumbnailImg} alt="ManuScript" className="w-8 h-8 shrink-0 rounded-lg" />
                {(isSidebarOpen) && (
                    <div>
-                       <span className="font-bold text-xl tracking-tight text-blue-950 dark:text-white">ManuScript <span className="text-xs text-gray-400 font-normal">powered by google gemini</span></span>
+                       <span className="font-bold text-xl tracking-tight text-blue-950 dark:text-white">ManuScript <span className="text-xs text-gray-400 font-normal">.ai</span></span>
                    </div>
                )}
            </div>
@@ -345,6 +383,7 @@ const App = () => {
            </div>
 
            <div className="flex items-center gap-6">
+              
               <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-gray-50 dark:bg-navy-900 rounded-full border border-gray-200 dark:border-navy-700">
                   <Lock className="w-3 h-3 text-emerald-500" />
                   <span className="text-[10px] text-gray-500 dark:text-slate-400">End-to-End Encrypted</span>

@@ -1,15 +1,19 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { Machine, SensorReading, LogEntry } from "../types";
 
-// CTO AUDIT FIX: Graceful handling of missing keys
-const API_KEY = process.env.API_KEY || '';
-const IS_MOCK_MODE = !API_KEY || API_KEY.includes('YOUR_KEY');
+// Helper to get a fresh AI client instance on every call
+// This ensures that if the user selects an API key via window.aistudio.openSelectKey(),
+// the new key (injected into process.env.API_KEY) is picked up immediately.
+const getAiClient = () => {
+    // Graceful handling of missing keys
+    const API_KEY = process.env.API_KEY || '';
+    if (!API_KEY || API_KEY.includes('YOUR_KEY')) {
+        console.warn("⚠️ SYSTEM WARNING: No valid Google GenAI API Key found. Running in simulation mode.");
+    }
+    return new GoogleGenAI({ apiKey: API_KEY });
+};
 
-if (IS_MOCK_MODE) {
-    console.warn("⚠️ SYSTEM WARNING: No valid Google GenAI API Key found. Running in simulation mode.");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const IS_MOCK_MODE = !process.env.API_KEY || process.env.API_KEY.includes('YOUR_KEY');
 
 // -- SAFETY & COMPLIANCE LAYER --
 const FORBIDDEN_KEYWORDS = ['weapon', 'violence', 'blood', 'human face', 'child', 'political', 'hate', 'flesh', 'animal'];
@@ -43,6 +47,38 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Prom
     }
     throw error;
   }
+}
+
+/**
+ * ROBUSTNESS LAYER:
+ * Tries to use the primary (High-Fidelity) model first.
+ * If it fails with 403 (Permission) or 404 (Not Found), falls back to the Flash (Standard) model.
+ */
+async function generateContentWithFallback(
+    params: any, 
+    primaryModel: string, 
+    fallbackModel: string
+): Promise<GenerateContentResponse> {
+    const ai = getAiClient();
+    try {
+        return await retry(() => ai.models.generateContent({
+            ...params,
+            model: primaryModel
+        }));
+    } catch (e: any) {
+        const errStr = JSON.stringify(e);
+        const isPermissionError = e.status === 403 || errStr.includes('403') || errStr.includes('PERMISSION_DENIED');
+        const isNotFoundError = e.status === 404 || errStr.includes('404') || errStr.includes('NOT_FOUND');
+        
+        if (isPermissionError || isNotFoundError) {
+            console.warn(`[Gemini Service] Model '${primaryModel}' inaccessible (${e.status}). Falling back to '${fallbackModel}'.`);
+            return await retry(() => ai.models.generateContent({
+                ...params,
+                model: fallbackModel
+            }));
+        }
+        throw e;
+    }
 }
 
 // -- EDGE COMPUTING SIMULATION --
@@ -89,8 +125,6 @@ export const analyzeMachineHealth = async (
   const localInsight = localHeuristicCheck(recentReadings, customThresholds);
   
   // STRATEGY: Hybrid Compute Circuit Breaker
-  // Use zero-cost local heuristics (physics engine) to intercept obvious Critical/Warning states.
-  // This avoids calling the LLM for deterministic threshold violations, saving cost/latency.
   if (localInsight && localInsight.includes("CRITICAL")) {
       return `[Automated Protection System]: ${localInsight}`;
   }
@@ -102,15 +136,13 @@ export const analyzeMachineHealth = async (
   }
 
   // STRATEGY: Token Topology Compression (CSV Density Packing)
-  // Compressing JSON/Labeled-Text into Pipe-Delimited-Values (CSV) reduces token count by ~60%.
-  // We strip variable names and rely on the header schema for the LLM to map values.
   const header = "Time|Vib|Temp|Noise|RPM|Out";
   const readingsCsv = recentReadings.slice(-50).map(r => 
     `${new Date(r.timestamp).toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'})}|${r.vibration.toFixed(1)}|${r.temperature.toFixed(0)}|${r.noise.toFixed(0)}|${r.rpm.toFixed(0)}|${r.productionRate.toFixed(0)}`
   ).join('\n');
 
   const logsSummary = recentLogs.length > 0 
-    ? recentLogs.slice(0, 3).map(l => `[${l.type}]: ${l.content}`).join('\n') // Context Window Optimization: Limit to last 3 logs
+    ? recentLogs.slice(0, 3).map(l => `[${l.type}]: ${l.content}`).join('\n')
     : "No logs.";
 
   const prompt = `
@@ -132,12 +164,12 @@ export const analyzeMachineHealth = async (
   `;
 
   try {
-    // STRATEGY: Model Tiering
-    // Upgraded to 'gemini-3-pro-preview' for advanced reasoning on complex telemetry.
-    const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-      model: 'gemini-3-pro-preview', 
-      contents: prompt,
-    }));
+    // FALLBACK: If 3-Pro (Preview) is 403 Forbidden, use 2.5-Flash (Standard)
+    const response = await generateContentWithFallback(
+        { contents: prompt },
+        'gemini-3-pro-preview',
+        'gemini-2.5-flash'
+    );
     return response.text || "Analysis unavailable.";
   } catch (error) {
     console.error("Gemini analysis failed:", error);
@@ -167,18 +199,20 @@ export const analyzeAttachedImage = async (
     `;
 
     try {
-        // STRATEGY: Multimodal Pro
-        // gemini-3-pro-preview used for high-fidelity visual reasoning and bounding box detection
-        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-pro-preview', 
-            contents: {
-                parts: [
-                    { text: prompt },
-                    { inlineData: { mimeType, data: base64Image } }
-                ]
+        // FALLBACK: If 3-Pro is 403, use 2.5-Flash
+        const response = await generateContentWithFallback(
+            {
+                contents: {
+                    parts: [
+                        { text: prompt },
+                        { inlineData: { mimeType, data: base64Image } }
+                    ]
+                },
+                config: { responseMimeType: "application/json" }
             },
-            config: { responseMimeType: "application/json" }
-        }));
+            'gemini-3-pro-preview',
+            'gemini-2.5-flash'
+        );
         return JSON.parse(cleanJson(response.text || "{}"));
     } catch (e) {
         return { analysis: "Visual analysis failed.", issueDetected: false, boundingBox: null };
@@ -187,7 +221,6 @@ export const analyzeAttachedImage = async (
 
 export const generateMaintenancePlan = async (alertMessage: string, machineContext: string) => {
     // STRATEGY: Logical Circuit Breaker
-    // If the system is healthy, do NOT call the LLM for a repair plan.
     if (alertMessage.includes("System Nominal") || alertMessage.includes("No issues") || alertMessage.includes("Normal")) {
         return {
             diagnosis: "System Nominal",
@@ -230,26 +263,29 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
     `;
 
     try {
-        // Upgraded to Gemini 3 Pro for complex planning and structured JSON output
-        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-pro-preview', 
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        diagnosis: { type: Type.STRING },
-                        urgency: { type: Type.STRING, enum: ["Low", "Medium", "High", "Immediate"] },
-                        repairSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        requiredTools: { type: Type.STRING },
-                        visualDefectCues: { type: Type.STRING, description: "Visual description of the damage for image generation." },
-                        visualGoldenCues: { type: Type.STRING, description: "Visual description of the perfect part." },
-                        confidenceScore: { type: Type.NUMBER, description: "Confidence score 0-100." }
+        // FALLBACK: Use 3-Pro, fallback to 2.5-Flash (supports responseSchema)
+        const response = await generateContentWithFallback(
+            {
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            diagnosis: { type: Type.STRING },
+                            urgency: { type: Type.STRING, enum: ["Low", "Medium", "High", "Immediate"] },
+                            repairSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
+                            requiredTools: { type: Type.STRING },
+                            visualDefectCues: { type: Type.STRING, description: "Visual description of the damage for image generation." },
+                            visualGoldenCues: { type: Type.STRING, description: "Visual description of the perfect part." },
+                            confidenceScore: { type: Type.NUMBER, description: "Confidence score 0-100." }
+                        }
                     }
                 }
-            }
-        }));
+            },
+            'gemini-3-pro-preview',
+            'gemini-2.5-flash'
+        );
         return JSON.parse(cleanJson(response.text || "{}"));
     } catch (e) {
         return { diagnosis: "Unknown Issue", repairSteps: ["Inspect manually"], urgency: "Medium", confidenceScore: 0 };
@@ -264,13 +300,11 @@ export const generateVisualSimulation = async (
 ): Promise<string | null> => {
     
     // STRATEGY: Gatekeeper
-    // Do not generate images if the prompt context is missing or implies health.
     if (!context || context.length < 5 || context === "System Nominal") return null;
 
     if (IS_MOCK_MODE) return null; 
 
     let prompt = "";
-    // Shortened negative prompt to save tokens
     const NEGATIVE_PROMPT = "Exclude: people, text, watermark, blueprint."; 
     const STYLE_GUIDE = "Style: 8k Macro Photography, Industrial.";
 
@@ -287,18 +321,22 @@ export const generateVisualSimulation = async (
     }
 
     try {
-        // Upgraded to Gemini 3 Pro Image Preview for High-Quality Industrial Visuals
-        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-pro-image-preview', 
-            contents: { parts: [{ text: `${prompt} ${STYLE_GUIDE} ${NEGATIVE_PROMPT}` }] },
-            config: { imageConfig: { aspectRatio: "16:9" } }
-        }));
+        // FALLBACK: Try gemini-2.5-flash-image (Preview). If 403/404, fallback to 2.5-Flash-Image (Standard)
+        const response = await generateContentWithFallback(
+            {
+                contents: { parts: [{ text: `${prompt} ${STYLE_GUIDE} ${NEGATIVE_PROMPT}` }] },
+                config: { imageConfig: { aspectRatio: "16:9" } }
+            },
+            'gemini-2.5-flash-image', // REPLACED gemini-3-pro-image-preview
+            'gemini-2.5-flash-image'
+        );
 
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
         }
         return null;
     } catch (e) {
+        console.error("Image generation error:", e);
         return null;
     }
 };
@@ -310,23 +348,27 @@ export const analyzeAudioSignature = async (machineType: string, base64Audio: st
     }
     const prompt = `Analyze this ${machineType} audio. Return JSON with 'classification', 'confidence', 'description'.`;
     try {
-        const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
-            contents: {
-                parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Audio } }]
-            },
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        classification: { type: Type.STRING },
-                        confidence: { type: Type.STRING },
-                        description: { type: Type.STRING }
+        // FALLBACK: Use 3-Pro, fallback to 2.5-Flash
+        const response = await generateContentWithFallback(
+            {
+                contents: {
+                    parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Audio } }]
+                },
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            classification: { type: Type.STRING },
+                            confidence: { type: Type.STRING },
+                            description: { type: Type.STRING }
+                        }
                     }
                 }
-            }
-        }));
+            },
+            'gemini-3-pro-preview',
+            'gemini-2.5-flash'
+        );
         return JSON.parse(cleanJson(response.text || "{}"));
     } catch (e) {
         return { classification: "Analysis Error", confidence: "0%", description: "Audio processing failed." };
@@ -336,8 +378,9 @@ export const analyzeAudioSignature = async (machineType: string, base64Audio: st
 export const transcribeAudioLog = async (base64Audio: string, mimeType: string = "audio/webm"): Promise<string> => {
     if (IS_MOCK_MODE) return "Simulation: Operator log transcription unavailable without API key.";
     try {
+        const ai = getAiClient();
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
+            model: 'gemini-2.5-flash', // Use Flash by default for simple transcription
             contents: {
                 parts: [{ text: "Transcribe audio." }, { inlineData: { mimeType, data: base64Audio } }]
             }
