@@ -386,7 +386,9 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                       </div>
                       <div className="absolute bottom-0 w-full bg-gradient-to-t from-black via-black/90 to-transparent p-6 pt-12 translate-y-full group-hover:translate-y-0 transition-transform duration-300">
                           <p className="text-rose-200 text-sm font-medium leading-tight">{structuredPlan?.visualDefectCues || structuredPlan?.diagnosis || "Diagnosis Pending..."}</p>
-                          <p className="text-[10px] text-rose-400/70 mt-1 uppercase tracking-wider">AI Confidence: 94%</p>
+                          <p className="text-[10px] text-rose-400/70 mt-1 uppercase tracking-wider">
+                              AI Confidence: {structuredPlan?.confidenceScore ? `${structuredPlan.confidenceScore}%` : 'Calculating...'}
+                          </p>
                       </div>
                   </div>
 

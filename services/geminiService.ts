@@ -208,7 +208,8 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
             ],
             requiredTools: "Hex Key Set, Dial Indicator, Torque Wrench",
             visualDefectCues: "The motor coupler will show visible gaps or angular offset.",
-            visualGoldenCues: "Perfectly aligned motor shaft and lead screw with flush coupling."
+            visualGoldenCues: "Perfectly aligned motor shaft and lead screw with flush coupling.",
+            confidenceScore: 92
         };
     }
 
@@ -219,6 +220,7 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
         CRITICAL: Provide vivid visual descriptions for image generation.
         'visualDefectCues': Describe exactly what the damaged part looks like (e.g. "cracked casing", "burnt wiring").
         'visualGoldenCues': Describe exactly what the factory-new part looks like (e.g. "shiny metallic surface", "connected wire").
+        'confidenceScore': Calculate a confidence percentage (0-100) based on how clear the fault signature is in the provided context.
     `;
 
     try {
@@ -235,14 +237,15 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
                         repairSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
                         requiredTools: { type: Type.STRING },
                         visualDefectCues: { type: Type.STRING, description: "Visual description of the damage for image generation prompt." },
-                        visualGoldenCues: { type: Type.STRING, description: "Visual description of the perfect part for image generation prompt." }
+                        visualGoldenCues: { type: Type.STRING, description: "Visual description of the perfect part for image generation prompt." },
+                        confidenceScore: { type: Type.NUMBER, description: "Confidence score 0-100 based on data clarity." }
                     }
                 }
             }
         }));
         return JSON.parse(cleanJson(response.text || "{}"));
     } catch (e) {
-        return { diagnosis: "Unknown Issue", repairSteps: ["Inspect manually"], urgency: "Medium" };
+        return { diagnosis: "Unknown Issue", repairSteps: ["Inspect manually"], urgency: "Medium", confidenceScore: 0 };
     }
 };
 
