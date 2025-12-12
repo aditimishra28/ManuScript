@@ -133,9 +133,9 @@ export const analyzeMachineHealth = async (
 
   try {
     // STRATEGY: Model Tiering
-    // Use 'gemini-2.5-flash' (Low Cost/High Throughput) for tabular text analysis.
+    // Upgraded to 'gemini-3-pro-preview' for advanced reasoning on complex telemetry.
     const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-      model: 'gemini-2.5-flash', 
+      model: 'gemini-3-pro-preview', 
       contents: prompt,
     }));
     return response.text || "Analysis unavailable.";
@@ -167,10 +167,10 @@ export const analyzeAttachedImage = async (
     `;
 
     try {
-        // STRATEGY: Multimodal Flash
-        // gemini-2.5-flash is multimodal and sufficient for basic defect verification
+        // STRATEGY: Multimodal Pro
+        // gemini-3-pro-preview used for high-fidelity visual reasoning and bounding box detection
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash', 
+            model: 'gemini-3-pro-preview', 
             contents: {
                 parts: [
                     { text: prompt },
@@ -230,8 +230,9 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
     `;
 
     try {
+        // Upgraded to Gemini 3 Pro for complex planning and structured JSON output
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash', 
+            model: 'gemini-3-pro-preview', 
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
@@ -286,8 +287,9 @@ export const generateVisualSimulation = async (
     }
 
     try {
+        // Upgraded to Gemini 3 Pro Image Preview for High-Quality Industrial Visuals
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash-image', 
+            model: 'gemini-3-pro-image-preview', 
             contents: { parts: [{ text: `${prompt} ${STYLE_GUIDE} ${NEGATIVE_PROMPT}` }] },
             config: { imageConfig: { aspectRatio: "16:9" } }
         }));
@@ -309,7 +311,7 @@ export const analyzeAudioSignature = async (machineType: string, base64Audio: st
     const prompt = `Analyze this ${machineType} audio. Return JSON with 'classification', 'confidence', 'description'.`;
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-pro-preview',
             contents: {
                 parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Audio } }]
             },
@@ -335,7 +337,7 @@ export const transcribeAudioLog = async (base64Audio: string, mimeType: string =
     if (IS_MOCK_MODE) return "Simulation: Operator log transcription unavailable without API key.";
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-pro-preview',
             contents: {
                 parts: [{ text: "Transcribe audio." }, { inlineData: { mimeType, data: base64Audio } }]
             }
