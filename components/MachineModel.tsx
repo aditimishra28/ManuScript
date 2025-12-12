@@ -166,18 +166,27 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
   const generateDefectVisuals = async () => {
       if (!structuredPlan?.diagnosis) return;
       const machineCtx = getMachineContext();
-      setLoadingVisual('defect');
       
-      // Use explicit visual cues from the reasoning model if available, otherwise fallback to diagnosis
+      // PARALLEL OPTIMIZATION: Set a unified loading state
+      setLoadingVisual('generating_visuals');
+      
       const defectPrompt = structuredPlan.visualDefectCues || structuredPlan.diagnosis;
       const goldenPrompt = structuredPlan.visualGoldenCues || structuredPlan.diagnosis;
 
-      const dImg = await generateVisualSimulation(machineCtx, defectPrompt, 'defect_current');
-      setDefectImage(dImg);
-      setLoadingVisual('golden');
-      const gImg = await generateVisualSimulation(machineCtx, goldenPrompt, 'golden_sample');
-      setGoldenImage(gImg);
-      setLoadingVisual(null);
+      try {
+        // Execute both generation requests in parallel to halve the latency
+        const [dImg, gImg] = await Promise.all([
+            generateVisualSimulation(machineCtx, defectPrompt, 'defect_current'),
+            generateVisualSimulation(machineCtx, goldenPrompt, 'golden_sample')
+        ]);
+        
+        setDefectImage(dImg);
+        setGoldenImage(gImg);
+      } catch (e) {
+        console.error("Simulation generation failed", e);
+      } finally {
+        setLoadingVisual(null);
+      }
   };
 
   const generateStepVisual = async (index: number, stepText: string) => {
@@ -343,7 +352,7 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                                 disabled={!!loadingVisual}
                                 className="bg-blue-950 hover:bg-blue-900 dark:bg-white dark:hover:bg-gray-200 text-white dark:text-navy-950 px-8 py-3 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-900/10 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100"
                             >
-                                {loadingVisual === 'defect' || loadingVisual === 'golden' ? <Loader2 className="w-5 h-5 animate-spin" /> : <BrainCircuit className="w-5 h-5" />}
+                                {loadingVisual === 'generating_visuals' ? <Loader2 className="w-5 h-5 animate-spin" /> : <BrainCircuit className="w-5 h-5" />}
                                 Generate Failure Simulation
                             </button>
                         ) : (
