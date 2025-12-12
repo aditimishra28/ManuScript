@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { Shield, Lock, Factory, Key, Mail, User, ArrowRight, CheckCircle, AlertTriangle } from 'lucide-react';
 import { SecurityContext } from '../services/securityLayer';
 
+// Asset Reference - Using remote high-res assets for reliability
+const cardBg = "https://images.unsplash.com/photo-1558494949-ef526b0042a0?auto=format&fit=crop&q=80&w=2000";
+const thumbnailImg = "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&q=80&w=100&h=100";
+
 interface AuthScreenProps {
   onLogin: () => void;
 }
@@ -79,16 +83,23 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
       
       {/* LEFT SIDE - Branding & Visuals (Hidden on small mobile) */}
       <div className="hidden lg:flex lg:w-1/2 relative flex-col justify-between p-12 bg-navy-950 dark:bg-black overflow-hidden text-white">
+        
+        {/* Featured Card Background */}
+        <div className="absolute inset-0 z-0">
+             <img src={cardBg} className="w-full h-full object-cover opacity-60" alt="Background" />
+             <div className="absolute inset-0 bg-gradient-to-t from-navy-950 via-navy-950/70 to-transparent"></div>
+        </div>
+        
         {/* Animated Background Mesh */}
-        <div className="absolute inset-0 opacity-20">
+        <div className="absolute inset-0 opacity-20 pointer-events-none">
              <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-900 via-navy-950 to-black"></div>
              <div className="absolute -bottom-1/2 -left-1/2 w-full h-full border-[100px] border-blue-500/10 rounded-full blur-3xl"></div>
         </div>
         
         <div className="relative z-10">
              <div className="flex items-center gap-3 mb-6">
-                <div className="p-2.5 bg-white text-navy-950 rounded-xl shadow-lg">
-                    <Factory className="w-8 h-8" />
+                <div className="w-12 h-12 rounded-xl overflow-hidden shadow-lg border border-white/10 bg-white/5">
+                    <img src={thumbnailImg} className="w-full h-full object-cover" alt="Logo" />
                 </div>
                 <div>
                     <h1 className="text-2xl font-bold text-white tracking-tight">ManuScript<span className="text-blue-400">.ai</span></h1>

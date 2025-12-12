@@ -37,7 +37,8 @@ export const validateSensorReading = (reading: any): SensorReading | null => {
         temperature: safeNumber(reading.temperature),
         noise: safeNumber(reading.noise),
         rpm: safeNumber(reading.rpm),
-        powerUsage: safeNumber(reading.powerUsage)
+        powerUsage: safeNumber(reading.powerUsage),
+        productionRate: safeNumber(reading.productionRate)
     };
 };
 

@@ -3,14 +3,20 @@
   "name": "ManuScript.ai Industrial IoT Dashboard",
   "icons": [
     {
-      "src": "https://cdn.jsdelivr.net/gh/lucide-icons/lucide/icons/factory.svg",
-      "type": "image/svg+xml",
-      "sizes": "192x192 512x512"
+      "src": "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&q=80&w=192&h=192",
+      "type": "image/jpeg",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&q=80&w=512&h=512",
+      "type": "image/jpeg",
+      "sizes": "512x512"
     }
   ],
   "start_url": ".",
   "display": "standalone",
   "theme_color": "#0f172a",
   "background_color": "#0f172a",
-  "orientation": "landscape"
+  "orientation": "landscape",
+  "description": "A comprehensive IIoT predictive maintenance dashboard powered by Google Gemini to analyze real-time sensor data, detect anomalies, and provide actionable maintenance insights."
 }

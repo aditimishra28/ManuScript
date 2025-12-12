@@ -168,7 +168,7 @@ class ManuscriptAIDatabase extends Dexie {
           await this.readings
             .where('timestamp')
             .below(HOT_CUTOFF)
-            .filter(r => !r.isAggregated) // Only process raw
+            .filter(r => !r.isAggregated!) // Only process raw
             .each(r => {
                 const bucketTime = Math.floor(r.timestamp / 60000) * 60000; 
                 const key = `${r.machineId}_${bucketTime}`;
@@ -192,8 +192,9 @@ class ManuscriptAIDatabase extends Dexie {
                   temperature: acc.temperature + curr.temperature,
                   noise: acc.noise + curr.noise,
                   rpm: acc.rpm + curr.rpm,
-                  powerUsage: acc.powerUsage + curr.powerUsage
-              }), { vibration: 0, temperature: 0, noise: 0, rpm: 0, powerUsage: 0 });
+                  powerUsage: acc.powerUsage + curr.powerUsage,
+                  productionRate: acc.productionRate + (curr.productionRate || 0)
+              }), { vibration: 0, temperature: 0, noise: 0, rpm: 0, powerUsage: 0, productionRate: 0 });
 
               const count = group.length;
 
@@ -205,13 +206,14 @@ class ManuscriptAIDatabase extends Dexie {
                   noise: avg.noise / count,
                   rpm: avg.rpm / count,
                   powerUsage: avg.powerUsage / count,
+                  productionRate: avg.productionRate / count,
                   isAggregated: true
               } as SensorReadingRecord);
           });
 
           // 3. Batch Transaction
           if (aggregatedRecords.length > 0) {
-              await this.transaction('rw', this.readings, async () => {
+              await (this as any).transaction('rw', this.readings, async () => {
                   await this.readings.bulkDelete(idsToDelete);
                   await this.readings.bulkAdd(aggregatedRecords);
               });

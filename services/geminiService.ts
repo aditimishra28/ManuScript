@@ -1,7 +1,15 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { Machine, SensorReading, LogEntry } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// CTO AUDIT FIX: Graceful handling of missing keys
+const API_KEY = process.env.API_KEY || '';
+const IS_MOCK_MODE = !API_KEY || API_KEY.includes('YOUR_KEY');
+
+if (IS_MOCK_MODE) {
+    console.warn("⚠️ SYSTEM WARNING: No valid Google GenAI API Key found. Running in simulation mode.");
+}
+
+const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 // -- SAFETY & COMPLIANCE LAYER --
 const FORBIDDEN_KEYWORDS = ['weapon', 'violence', 'blood', 'human face', 'child', 'political', 'hate', 'flesh', 'animal'];
@@ -13,24 +21,17 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // Helper to clean JSON string from Markdown wrapping and extra text
 const cleanJson = (text: string): string => {
     if (!text) return "{}";
-    // 1. Remove Markdown code blocks
     let cleaned = text.replace(/```json|```/g, '');
-    
-    // 2. Find the first '{' and last '}' to extract valid JSON object
     const firstBrace = cleaned.indexOf('{');
     const lastBrace = cleaned.lastIndexOf('}');
-    
     if (firstBrace !== -1 && lastBrace !== -1) {
         cleaned = cleaned.substring(firstBrace, lastBrace + 1);
     } else {
-        // Fallback: if no braces found, return empty object string
         return "{}";
     }
-    
     return cleaned.trim();
 };
 
-// Helper to retry failed requests
 async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Promise<T> {
   try {
     return await fn();
@@ -44,35 +45,31 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delayMs = 1000): Prom
   }
 }
 
-// -- EDGE COMPUTING SIMULATION (PHASE 4A) --
-export const calculateZScore = (value: number, history: number[]): number => {
-    if (history.length < 5) return 0;
-    const mean = history.reduce((a, b) => a + b, 0) / history.length;
-    const stdDev = Math.sqrt(history.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / history.length);
-    if (stdDev === 0) return 0;
-    return (value - mean) / stdDev;
-};
-
+// -- EDGE COMPUTING SIMULATION --
 export const localHeuristicCheck = (readings: SensorReading[], thresholds: any): string | null => {
-    if (readings.length < 10) return null;
+    if (!readings || readings.length < 10) return null;
     const latest = readings[readings.length - 1];
     
-    // 1. Hard Limits (Safety Cutoffs)
-    if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL: Vibration exceeds safety limits (ISO 10816 Zone D). Immediate shutdown recommended.";
-    if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL: Core overheating detected. Fire hazard.";
+    // Dead Sensor Check
+    if (latest.vibration === 0 && latest.temperature === 0 && latest.powerUsage === 0) {
+        return "CRITICAL: Sensor Failure detected. Telemetry stream is flatlined. Check connection.";
+    }
 
-    // 2. Statistical Anomaly Detection (Z-Score)
+    // Safety Cutoffs
+    if (latest.vibration > (thresholds?.vibration || 8.5)) return "CRITICAL: Vibration exceeds safety limits (ISO 10816 Zone D). Possible Misalignment or Bearing Failure.";
+    if (latest.temperature > (thresholds?.temperature || 95)) return "CRITICAL: Core overheating detected. Fire hazard. Possible Lubrication Failure.";
+
+    // Statistical Anomaly (Simplified Z-Score)
     const recentVibs = readings.slice(-20).map(r => r.vibration);
-    const zScoreVib = calculateZScore(latest.vibration, recentVibs);
-    
-    if (Math.abs(zScoreVib) > 3.5) {
-        return `WARNING: Statistical anomaly detected (Z-Score: ${zScoreVib.toFixed(1)}). Vibration is deviating significantly from the running average.`;
+    const mean = recentVibs.reduce((a, b) => a + b, 0) / recentVibs.length;
+    if (Math.abs(latest.vibration - mean) > 3.0) {
+         return "WARNING: Statistical anomaly detected. Vibration deviation > 3.0.";
     }
 
     return null;
 };
 
-// Analyze raw textual sensor data AND human logs (PHASE 4B)
+// Analyze raw textual sensor data AND human logs
 export const analyzeMachineHealth = async (
   machine: Machine,
   recentReadings: SensorReading[],
@@ -81,14 +78,18 @@ export const analyzeMachineHealth = async (
 ): Promise<string> => {
   
   const localInsight = localHeuristicCheck(recentReadings, customThresholds);
-  
   if (localInsight && localInsight.includes("CRITICAL")) {
       return `[Automated Protection System]: ${localInsight}`;
   }
 
-  // Expanded Context Window per User Guide (Last 50 readings)
+  // FALLBACK FOR DEMO IF NO KEY
+  if (IS_MOCK_MODE) {
+      await delay(1500);
+      return "AI SIMULATION: Detected irregular oscillation in the X-Axis stepper motor. Recommendation: Inspect coupler alignment and lubricate guide rails.";
+  }
+
   const readingsSummary = recentReadings.slice(-50).map(r => 
-    `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}`
+    `Time: ${new Date(r.timestamp).toLocaleTimeString()}, Vib: ${r.vibration.toFixed(2)}, Temp: ${r.temperature.toFixed(1)}, Noise: ${r.noise.toFixed(1)}, RPM: ${r.rpm.toFixed(0)}, Output: ${r.productionRate}`
   ).join('\n');
 
   const logsSummary = recentLogs.length > 0 
@@ -109,10 +110,11 @@ export const analyzeMachineHealth = async (
     ${localInsight ? `Local Algorithm Flag: ${localInsight}` : ''}
 
     Task:
-    Analyze patterns. If a failure is detected, identify the SPECIFIC component responsible (e.g. "Inner Race Bearing", "Coolant Pump Impeller", "Axis Lead Screw").
+    Analyze patterns, noise, vibration, product output, alignment, bearing wear, motor failure, lubrication issues, electronic component failure, overheating, unexpected breakdowns, calibration drift, and sensor failure.
+    If a failure is detected, identify the SPECIFIC component and the failure mode.
     
     Output:
-    Concise technical assessment (under 50 words). Focus on root cause component. Do not format as JSON.
+    Concise technical assessment (under 50 words). Focus on root cause.
   `;
 
   try {
@@ -127,35 +129,32 @@ export const analyzeMachineHealth = async (
   }
 };
 
-/**
- * PHASE 4D: VISION VERIFICATION (GROUNDING)
- */
 export const analyzeAttachedImage = async (
     machineName: string, 
     base64Image: string, 
     mimeType: string,
     currentDiagnosis: string
 ) => {
+    if (IS_MOCK_MODE) {
+        await delay(2000);
+        return {
+            analysis: "SIMULATION: Visual inspection confirms oxidation on the bearing housing consistent with the vibration alerts.",
+            issueDetected: true,
+            boundingBox: [300, 400, 600, 700]
+        };
+    }
+
     const prompt = `
-        You are a Senior Industrial Mechanic performing Visual Verification (Grounding). 
-        Context: The machine '${machineName}' is flagging sensor alerts with the diagnosis: "${currentDiagnosis}".
+        You are a Senior Industrial Mechanic.
+        Context: The machine '${machineName}' has diagnosis: "${currentDiagnosis}".
+        Analyze the attached photo.
         
-        Task:
-        Analyze the attached photo of the actual machine component.
-        1. Identify the specific part in the image that corresponds to the diagnosis.
-        2. Verify if visual evidence (rust, leaks, cracks, discoloration, or misalignment) matches the sensor data.
-        
-        Output:
-        Return a JSON object with this schema:
+        Output JSON:
         {
-            "analysis": "Short direct observation for the operator.",
+            "analysis": "Short observation.",
             "issueDetected": boolean,
-            "boundingBox": [ymin, xmin, ymax, xmax] 
+            "boundingBox": [ymin, xmin, ymax, xmax] (0-1000 scale)
         }
-        
-        Note: boundingBox must be an array of 4 integers normalized to a 0-1000 scale.
-        Example: [100, 200, 500, 600] for a box in the middle.
-        If no specific defect is visible, return null for boundingBox.
     `;
 
     try {
@@ -167,29 +166,34 @@ export const analyzeAttachedImage = async (
                     { inlineData: { mimeType, data: base64Image } }
                 ]
             },
-            config: {
-                responseMimeType: "application/json"
-            }
+            config: { responseMimeType: "application/json" }
         }));
-        
-        const rawText = response.text || "{}";
-        return JSON.parse(cleanJson(rawText));
+        return JSON.parse(cleanJson(response.text || "{}"));
     } catch (e) {
-        console.error("Vision analysis failed", e);
         return { analysis: "Visual analysis failed.", issueDetected: false, boundingBox: null };
     }
 };
 
-// Structured analysis for alerts + REPAIR STEPS
 export const generateMaintenancePlan = async (alertMessage: string, machineContext: string) => {
+    if (IS_MOCK_MODE) {
+        await delay(1000);
+        return {
+            diagnosis: "Stepper Motor Misalignment",
+            urgency: "High",
+            repairSteps: [
+                "Lockout/Tagout the main power supply.",
+                "Remove the X-Axis motor housing cover using a 4mm hex key.",
+                "Loosen the motor mount bolts and realign using a dial indicator.",
+                "Retighten bolts to 45Nm torque.",
+                "Run calibration sequence."
+            ],
+            requiredTools: "Hex Key Set, Dial Indicator, Torque Wrench"
+        };
+    }
+
     const prompt = `
-        Context: Machine ${machineContext} has a diagnosed issue: "${alertMessage}".
-        Generate a structured maintenance plan.
-        
-        Requirements:
-        1. Diagnosis: What is wrong? Be precise (e.g. "Misalignment of Coupler").
-        2. Repair Steps: 3-5 distinct, physical actions. Use imperative verbs (e.g. "Loosen", "Align", "Lubricate"). Mention specific tools in the step description.
-        3. Tooling: List required tools.
+        Context: Machine ${machineContext}, Issue: "${alertMessage}".
+        Generate structured maintenance plan.
     `;
 
     try {
@@ -203,28 +207,18 @@ export const generateMaintenancePlan = async (alertMessage: string, machineConte
                     properties: {
                         diagnosis: { type: Type.STRING },
                         urgency: { type: Type.STRING, enum: ["Low", "Medium", "High", "Immediate"] },
-                        repairSteps: {
-                          type: Type.ARRAY,
-                          items: { type: Type.STRING },
-                          description: "Step-by-step repair instructions including tool usage"
-                        },
+                        repairSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
                         requiredTools: { type: Type.STRING }
                     }
                 }
             }
         }));
-        
-        const rawText = response.text || "{}";
-        return JSON.parse(cleanJson(rawText));
+        return JSON.parse(cleanJson(response.text || "{}"));
     } catch (e) {
-        console.error("Plan generation failed", e);
         return { diagnosis: "Unknown Issue", repairSteps: ["Inspect manually"], urgency: "Medium" };
     }
 };
 
-/**
- * PHASE 4C: GENERATIVE SIMULATION LAB (HERO FEATURE)
- */
 export const generateVisualSimulation = async (
     machineInfo: string, 
     context: string, 
@@ -232,82 +226,51 @@ export const generateVisualSimulation = async (
     stepDetail?: string
 ): Promise<string | null> => {
     
+    if (IS_MOCK_MODE) return null; // Cannot mock generated images
+
     let prompt = "";
-    const NEGATIVE_PROMPT = "Exclude: people faces, human bodies, animals, biological matter, artistic abstraction, blur, low resolution, text overlays, watermarks, cartoon style, sketch, drawing.";
-    const STYLE_GUIDE = "Style: 8k resolution, Photorealistic Industrial Macro Photography, Cinematic Lighting, Ray Tracing, Metallic Texture, High Contrast, Sharp Focus.";
+    const NEGATIVE_PROMPT = "Exclude: people faces, human bodies, animals, biological matter, text, watermarks, cartoon.";
+    const STYLE_GUIDE = "Style: 8k resolution, Photorealistic Industrial Macro Photography, Cinematic Lighting, Metallic Texture.";
 
     switch(mode) {
         case 'golden_sample':
-            prompt = `Reference Image: A brand new, factory-perfect replacement part for a ${machineInfo}. 
-            Component Context: ${context}. 
-            Visuals: Clean chrome/metal, perfect alignment, no wear, no dust, no rust. 
-            View: Isometric or top-down engineering view on a clean workstation.`;
+            prompt = `Reference Image: Factory-perfect part for ${machineInfo}. Context: ${context}. Clean metal, perfect alignment.`;
             break;
-            
         case 'defect_current':
-            prompt = `Failure Analysis Image: A close-up of a broken/damaged component on a ${machineInfo}. 
-            Diagnosis: ${context}.
-            Visuals: Depict specific signs of failure such as severe heat discoloration (blueing), sheared metal, heavy rust, cracking, or severe misalignment. 
-            The image should serve as forensic visual evidence of the breakdown.`;
+            prompt = `Failure Analysis: Broken component on ${machineInfo}. Diagnosis: ${context}. Show heat discoloration, rust, or cracks.`;
             break;
-            
         case 'repair_step':
-            prompt = `Technical Maintenance Guide: A step-by-step visual instruction for ${machineInfo}.
-            Action: "${stepDetail}".
-            Visuals: Show the specific machine part and the required tool (e.g., wrench, screwdriver, multimeter) in position. 
-            View: Close-up action shot. Clear separation between part and tool.`;
+            prompt = `Maintenance Guide: ${machineInfo}. Action: "${stepDetail}". Close-up of tool working on part.`;
             break;
     }
-
-    const finalPrompt = `${prompt} ${INDUSTRIAL_CONTEXT_ENFORCER} ${STYLE_GUIDE} ${NEGATIVE_PROMPT}`;
 
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
-            contents: {
-                parts: [{ text: finalPrompt }]
-            },
-            config: {
-                imageConfig: {
-                    aspectRatio: "16:9", 
-                    numberOfImages: 1
-                }
-            }
+            contents: { parts: [{ text: `${prompt} ${INDUSTRIAL_CONTEXT_ENFORCER} ${STYLE_GUIDE} ${NEGATIVE_PROMPT}` }] },
+            config: { imageConfig: { aspectRatio: "16:9" } }
         }));
 
         for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData) {
-                return `data:image/png;base64,${part.inlineData.data}`;
-            }
+            if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
         }
         return null;
     } catch (e) {
-        console.error("Image generation failed", e);
         return null;
     }
 };
 
-// PHASE 4E: AUDIO SIGNATURE ANALYSIS
 export const analyzeAudioSignature = async (machineType: string, base64Audio: string, mimeType: string = "audio/webm") => {
-    const prompt = `
-      You are an Acoustic Engineer. Listen to this recording of a ${machineType}.
-      Analyze the sound signature. Identify patterns like grinding, hissing, cavitation, or imbalance.
-      Return a JSON with 'classification' (Normal, Bearing Fault, Gear Mesh, Loose Mount), 'confidence' (percentage), and a 'description' of the sound.
-    `;
-
+    if (IS_MOCK_MODE) {
+        await delay(2000);
+        return { classification: "Bearing Inner Race Fault", confidence: "92%", description: "High frequency impacting detected at 3.2kHz indicating metal-on-metal contact." };
+    }
+    const prompt = `Analyze this ${machineType} audio. Return JSON with 'classification', 'confidence', 'description'.`;
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             contents: {
-                parts: [
-                    { text: prompt },
-                    { 
-                        inlineData: {
-                            mimeType: mimeType, 
-                            data: base64Audio
-                        }
-                    }
-                ]
+                parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Audio } }]
             },
             config: {
                 responseMimeType: "application/json",
@@ -321,33 +284,19 @@ export const analyzeAudioSignature = async (machineType: string, base64Audio: st
                 }
             }
         }));
-        const rawText = response.text || "{}";
-        return JSON.parse(cleanJson(rawText));
+        return JSON.parse(cleanJson(response.text || "{}"));
     } catch (e) {
-        console.error("Audio analysis failed", e);
-        return { 
-            classification: "Analysis Error", 
-            confidence: "0%", 
-            description: "Could not process audio stream." 
-        };
+        return { classification: "Analysis Error", confidence: "0%", description: "Audio processing failed." };
     }
 };
 
 export const transcribeAudioLog = async (base64Audio: string, mimeType: string = "audio/webm"): Promise<string> => {
-    const prompt = `Transcribe this operator voice log. Remove filler words. Return text only.`;
+    if (IS_MOCK_MODE) return "Simulation: Operator log transcription unavailable without API key.";
     try {
         const response = await retry<GenerateContentResponse>(() => ai.models.generateContent({
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             contents: {
-                parts: [
-                    { text: prompt },
-                    { 
-                        inlineData: {
-                            mimeType: mimeType, 
-                            data: base64Audio
-                        }
-                    }
-                ]
+                parts: [{ text: "Transcribe audio." }, { inlineData: { mimeType, data: base64Audio } }]
             }
         }));
         return response.text || "";

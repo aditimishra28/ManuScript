@@ -13,6 +13,7 @@ export interface SensorReading {
   noise: number; // dB
   rpm: number;
   powerUsage: number; // kW
+  productionRate: number; // units/hour (Product Output)
 }
 
 export interface LogEntry {

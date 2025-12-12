@@ -83,8 +83,4 @@ export const LiveCharts: React.FC<LiveChartsProps> = React.memo(({
       </ResponsiveContainer>
     </div>
   );
-}, (prevProps, nextProps) => {
-    // Custom comparison for memo: only re-render if data length changes or threshold changes
-    // This assumes data is appended immutably
-    return prevProps.data === nextProps.data && prevProps.threshold === nextProps.threshold;
-});
+}); // Removed custom comparator to rely on standard immutable prop checks

@@ -21,7 +21,8 @@ import {
   Lock,
   X,
   Moon,
-  Sun
+  Sun,
+  AlertTriangle
 } from 'lucide-react';
 import { Machine, MachineStatus, Alert } from './types';
 import MachineModel from './components/MachineModel';
@@ -30,6 +31,9 @@ import MachineWizard from './components/MachineWizard';
 import { pipeline } from './services/pipeline';
 import { MachineCard } from './components/MachineCard';
 import { SecurityContext } from './services/securityLayer';
+
+// Asset Reference - Remote URL to ensure stability
+const thumbnailImg = "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&q=80&w=100&h=100";
 
 type ViewState = 'dashboard' | 'alerts' | 'machines' | 'settings';
 type Theme = 'dark' | 'light';
@@ -141,7 +145,6 @@ const App = () => {
     const offlineCount = machines.filter(m => m.status === MachineStatus.OFFLINE).length;
     
     // Dynamic Efficiency Calculation
-    // Base 100% - penalty for each issue
     let calculatedEfficiency = 100;
     if (total > 0) {
         const penalty = (criticalCount * 30 + warningCount * 10 + offlineCount * 100) / total;
@@ -314,6 +317,9 @@ const App = () => {
   return (
     <div className="flex h-screen bg-white dark:bg-black text-gray-900 dark:text-slate-200 overflow-hidden font-sans transition-colors duration-300">
       
+      {/* SECURITY BANNER */}
+      <div className="fixed top-0 left-0 right-0 h-1 bg-gradient-to-r from-rose-500 via-amber-500 to-rose-500 z-50"></div>
+      
       {isSidebarOpen && (
           <div className="fixed inset-0 bg-black/20 z-20 lg:hidden backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
       )}
@@ -324,7 +330,7 @@ const App = () => {
       }`}>
         <div className="p-6 border-b border-gray-200 dark:border-navy-800 flex justify-between items-center">
            <div className="flex items-center gap-3">
-               <Factory className="w-8 h-8 text-blue-950 dark:text-white shrink-0" />
+               <img src={thumbnailImg} alt="ManuScript.ai" className="w-8 h-8 shrink-0 rounded-lg" />
                {(isSidebarOpen) && (
                    <div>
                        <span className="font-bold text-xl tracking-tight text-blue-950 dark:text-white">ManuScript<span className="text-gray-400">.ai</span></span>
@@ -333,10 +339,16 @@ const App = () => {
            </div>
            <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-gray-400"><X className="w-6 h-6" /></button>
         </div>
+        
         {isSidebarOpen && (
-           <div className="px-6 pb-2 mt-1 text-[9px] text-gray-500 dark:text-slate-400 font-bold tracking-wider uppercase opacity-80">
-               Powered by Google Gemini
-           </div>
+            <div className="mx-4 mt-4 p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-500/20 rounded-lg">
+                <div className="flex items-center gap-2 text-amber-600 dark:text-amber-500 text-xs font-bold uppercase mb-1">
+                    <AlertTriangle className="w-3 h-3" /> Demo Environment
+                </div>
+                <p className="text-[10px] text-amber-800 dark:text-amber-200/70 leading-tight">
+                    Mock authentication active. Do not use real PII or production keys.
+                </p>
+            </div>
         )}
         
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
