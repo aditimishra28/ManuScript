@@ -165,6 +165,10 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
 
   const generateDefectVisuals = async () => {
       if (!structuredPlan?.diagnosis) return;
+      
+      // OPTIMIZATION: Do not generate images for healthy systems
+      if (structuredPlan.diagnosis === "System Nominal" || !structuredPlan.visualDefectCues) return;
+
       const machineCtx = getMachineContext();
       
       // PARALLEL OPTIMIZATION: Set a unified loading state
@@ -349,11 +353,11 @@ const MachineModel: React.FC<MachineModelProps> = ({ machine, onClose }) => {
                         {!defectImage ? (
                             <button 
                                 onClick={generateDefectVisuals}
-                                disabled={!!loadingVisual}
-                                className="bg-blue-950 hover:bg-blue-900 dark:bg-white dark:hover:bg-gray-200 text-white dark:text-navy-950 px-8 py-3 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-900/10 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100"
+                                disabled={!!loadingVisual || structuredPlan?.diagnosis === "System Nominal"}
+                                className={`bg-blue-950 hover:bg-blue-900 dark:bg-white dark:hover:bg-gray-200 text-white dark:text-navy-950 px-8 py-3 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-blue-900/10 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 disabled:cursor-not-allowed`}
                             >
                                 {loadingVisual === 'generating_visuals' ? <Loader2 className="w-5 h-5 animate-spin" /> : <BrainCircuit className="w-5 h-5" />}
-                                Generate Failure Simulation
+                                {structuredPlan?.diagnosis === "System Nominal" ? "System Healthy (Sim Disabled)" : "Generate Failure Simulation"}
                             </button>
                         ) : (
                             <button 
