@@ -14,23 +14,19 @@ import {
   Shield,
   User,
   Plus,
-  LogOut,
   Info,
   Wifi,
   WifiOff,
   Lock,
   X,
   Moon,
-  Sun,
-  AlertTriangle
+  Sun
 } from 'lucide-react';
 import { Machine, MachineStatus, Alert } from './types';
 import MachineModel from './components/MachineModel';
-import AuthScreen from './components/AuthScreen';
 import MachineWizard from './components/MachineWizard';
 import { pipeline } from './services/pipeline';
 import { MachineCard } from './components/MachineCard';
-import { SecurityContext } from './services/securityLayer';
 
 // Asset Reference - Remote URL to ensure stability
 const thumbnailImg = "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&q=80&w=100&h=100";
@@ -39,11 +35,6 @@ type ViewState = 'dashboard' | 'alerts' | 'machines' | 'settings';
 type Theme = 'dark' | 'light';
 
 const App = () => {
-  // Auth State
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-      return SecurityContext.validateSession();
-  });
-  
   // Theme State
   const [theme, setTheme] = useState<Theme>(() => {
       return (localStorage.getItem('theme') as Theme) || 'dark';
@@ -65,8 +56,8 @@ const App = () => {
   // Modal State
   const [showWizard, setShowWizard] = useState(false);
 
-  // User info state
-  const [currentUser, setCurrentUser] = useState({ name: 'Operator', role: 'Viewer' });
+  // User info state - Default to Admin/Operator since auth is removed
+  const [currentUser, setCurrentUser] = useState({ name: 'Senior Operator', role: 'Admin' });
 
   // Apply Theme Effect
   useEffect(() => {
@@ -84,37 +75,23 @@ const App = () => {
       setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   };
 
-  const handleLogin = () => {
-      setIsAuthenticated(true);
-      setCurrentUser(SecurityContext.getUser());
-  };
-
-  const handleLogout = () => {
-      SecurityContext.destroySession();
-      setIsAuthenticated(false);
-      pipeline.stop();
-  };
-
-  // Initialize Pipeline Subscription and User Info
+  // Initialize Pipeline Subscription
   useEffect(() => {
-    if (isAuthenticated) {
-        setCurrentUser(SecurityContext.getUser());
-        pipeline.start();
-        const unsubscribe = pipeline.subscribe((updatedMachines, updatedAlerts, isLive) => {
-            setMachines(updatedMachines);
-            setAlerts(updatedAlerts);
-            setIsLiveConnection(isLive);
-            setSelectedMachine(currentSelection => {
-                if (!currentSelection) return null;
-                return updatedMachines.find(m => m.id === currentSelection.id) || currentSelection;
-            });
-        });
-        return () => {
-            unsubscribe();
-            pipeline.stop();
-        };
-    }
-  }, [isAuthenticated]);
+      pipeline.start();
+      const unsubscribe = pipeline.subscribe((updatedMachines, updatedAlerts, isLive) => {
+          setMachines(updatedMachines);
+          setAlerts(updatedAlerts);
+          setIsLiveConnection(isLive);
+          setSelectedMachine(currentSelection => {
+              if (!currentSelection) return null;
+              return updatedMachines.find(m => m.id === currentSelection.id) || currentSelection;
+          });
+      });
+      return () => {
+          unsubscribe();
+          pipeline.stop();
+      };
+  }, []);
 
   // Handle Mobile Sidebar
   useEffect(() => {
@@ -312,13 +289,8 @@ const App = () => {
     </button>
   );
 
-  if (!isAuthenticated) return <AuthScreen onLogin={handleLogin} />;
-
   return (
     <div className="flex h-screen bg-white dark:bg-black text-gray-900 dark:text-slate-200 overflow-hidden font-sans transition-colors duration-300">
-      
-      {/* SECURITY BANNER */}
-      <div className="fixed top-0 left-0 right-0 h-1 bg-gradient-to-r from-rose-500 via-amber-500 to-rose-500 z-50"></div>
       
       {isSidebarOpen && (
           <div className="fixed inset-0 bg-black/20 z-20 lg:hidden backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
@@ -330,26 +302,15 @@ const App = () => {
       }`}>
         <div className="p-6 border-b border-gray-200 dark:border-navy-800 flex justify-between items-center">
            <div className="flex items-center gap-3">
-               <img src={thumbnailImg} alt="ManuScript.ai" className="w-8 h-8 shrink-0 rounded-lg" />
+               <img src={thumbnailImg} alt="ManuScript" className="w-8 h-8 shrink-0 rounded-lg" />
                {(isSidebarOpen) && (
                    <div>
-                       <span className="font-bold text-xl tracking-tight text-blue-950 dark:text-white">ManuScript<span className="text-gray-400">.ai</span></span>
+                       <span className="font-bold text-xl tracking-tight text-blue-950 dark:text-white">ManuScript <span className="text-xs text-gray-400 font-normal">powered by google gemini</span></span>
                    </div>
                )}
            </div>
            <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-gray-400"><X className="w-6 h-6" /></button>
         </div>
-        
-        {isSidebarOpen && (
-            <div className="mx-4 mt-4 p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-500/20 rounded-lg">
-                <div className="flex items-center gap-2 text-amber-600 dark:text-amber-500 text-xs font-bold uppercase mb-1">
-                    <AlertTriangle className="w-3 h-3" /> Demo Environment
-                </div>
-                <p className="text-[10px] text-amber-800 dark:text-amber-200/70 leading-tight">
-                    Mock authentication active. Do not use real PII or production keys.
-                </p>
-            </div>
-        )}
         
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
            <NavItem view="dashboard" icon={LayoutDashboard} label="Dashboard" />
@@ -359,13 +320,6 @@ const App = () => {
         </nav>
 
         <div className="p-4 border-t border-gray-200 dark:border-navy-800">
-            <button 
-                onClick={handleLogout}
-                className="flex items-center gap-3 w-full p-2 text-gray-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-gray-50 dark:hover:bg-navy-900 rounded-lg transition-colors mb-4"
-            >
-                <LogOut className="w-5 h-5" />
-                {isSidebarOpen && <span className="text-sm">Sign Out</span>}
-            </button>
             <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full bg-blue-950 dark:bg-white flex items-center justify-center text-white dark:text-navy-950 font-bold text-xs uppercase shrink-0">
                     {currentUser.name.charAt(0)}

@@ -1,7 +1,5 @@
 {
-  "name": "ManuScript.ai",
-  "description": "A comprehensive IIoT predictive maintenance dashboard powered by Google Gemini 2.5 to analyze real-time sensor data, detect anomalies, and provide actionable maintenance insights.",
-  "requestFramePermissions": [
-    "microphone"
-  ]
+  "name": "ManuScript",
+  "description": "ManuScript is a comprehensive IIoT predicts machine failures from real time sensors, generating visual damage insights and image based steps to stop issue early.",
+  "requestFramePermissions": []
 }
