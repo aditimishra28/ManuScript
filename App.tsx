@@ -342,8 +342,9 @@ const App = () => {
            <div className="flex items-center gap-3">
                <img src={thumbnailImg} alt="ManuScript" className="w-8 h-8 shrink-0 rounded-lg" />
                {(isSidebarOpen) && (
-                   <div>
-                       <span className="font-bold text-xl tracking-tight text-blue-950 dark:text-white">ManuScript <span className="text-xs text-gray-400 font-normal">.ai</span></span>
+                   <div className="flex flex-col">
+                       <span className="font-bold text-lg tracking-tight text-blue-950 dark:text-white leading-tight">ManuScript</span>
+                       <span className="text-[10px] font-semibold text-blue-600 dark:text-blue-400">Powered by Google Gemini</span>
                    </div>
                )}
            </div>
